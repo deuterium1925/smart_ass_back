@@ -5,6 +5,7 @@
       systems = [ "x86_64-linux" ];
       imports = [
         ./shell.nix
+        ./configuration.nix
       ];
     };
 
