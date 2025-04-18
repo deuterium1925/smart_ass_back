@@ -8,13 +8,15 @@
   perSystem =
     { pkgs, config, ... }:
     {
-      devShells.default = config.pre-commit.devShell.overrideAttrs {
-        packages = with pkgs; [
-          bashInteractive
-          just
-          nixos-anywhere
-        ];
-      };
+      devShells.default = config.pre-commit.devShell.overrideAttrs (oa: {
+        nativeBuildInputs =
+          oa.nativeBuildInputs or [ ]
+          ++ (with pkgs; [
+            bashInteractive
+            just
+            nixos-anywhere
+          ]);
+      });
 
       pre-commit.settings.hooks = {
         treefmt = {
