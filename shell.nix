@@ -14,6 +14,8 @@
           ++ (with pkgs; [
             bashInteractive
             just
+            passh
+            age
             nixos-anywhere
           ]);
       });
