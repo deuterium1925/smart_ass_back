@@ -4,7 +4,7 @@ export NIX_SSHOPTS := "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=
 deploy:
   @passh -c 3 \
     -C \
-    -p "$(age -i "$HOME/.ssh/id_ed25519" -d user_password.age)" \
+    -p "$(age -i "$HOME/.ssh/id_ed25519" -d nix/user_password.age)" \
     -P '\[sudo\] password' \
     nixos-rebuild switch --fast --use-remote-sudo --flake . --target-host ahmed@82.97.248.178
 
