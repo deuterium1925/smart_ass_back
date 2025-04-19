@@ -115,7 +115,9 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
 
         # Store the current conversation turn in long-term memory
         timestamp = str(int(time.time()))  # Use current timestamp as a simple ordering mechanism
-        await vector_db_service.store_conversation_turn(session_id, user_text, operator_response, timestamp)
+        success = await vector_db_service.store_conversation_turn(session_id, user_text, operator_response, timestamp)
+        if not success:
+            app_logger.warning(f"Failed to store conversation turn for session {session_id}; continuing processing")
 
         # Assemble final response
         output = ProcessingResultOutput(
@@ -126,7 +128,9 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             suggestions=suggestions,
             summary=summary_result,
             qa_feedback=qa_feedback,
-            consolidated_output=f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'"
+            consolidated_output=f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'",
+            conversation_history=history,  # Include retrieved history
+            history_storage_status=success  # Indicate storage status
         )
         app_logger.info(f"Orchestrator: Completed processing for session {session_id}")
         return output

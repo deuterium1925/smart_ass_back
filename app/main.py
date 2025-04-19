@@ -27,14 +27,23 @@ async def startup_event():
     app_logger.info("Starting up Smart Assistant Backend...")
     await vector_db_service.ensure_collection()
     
-    # Check if the collection already has points to avoid duplicate indexing
     try:
-        collection_info = await asyncio.to_thread(
+        # Check and log status of both collections
+        collection_info_knowledge = await asyncio.to_thread(
             vector_db_service.client.get_collection,
             collection_name=vector_db_service.collection_name
         )
-        if collection_info.points_count > 0:
-            app_logger.info(f"Collection {vector_db_service.collection_name} already has {collection_info.points_count} points, skipping indexing.")
+        app_logger.info(f"Collection {vector_db_service.collection_name} status: {collection_info_knowledge.points_count} points")
+
+        collection_info_history = await asyncio.to_thread(
+            vector_db_service.client.get_collection,
+            collection_name=vector_db_service.history_collection_name
+        )
+        app_logger.info(f"Collection {vector_db_service.history_collection_name} status: {collection_info_history.points_count} points")
+
+        # Indexing logic for knowledge base
+        if collection_info_knowledge.points_count > 0:
+            app_logger.info(f"Collection {vector_db_service.collection_name} already has {collection_info_knowledge.points_count} points, skipping indexing.")
         else:
             app_logger.info(f"Collection {vector_db_service.collection_name} is empty, starting knowledge base indexing...")
             successful_indices = 0

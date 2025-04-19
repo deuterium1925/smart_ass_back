@@ -1,6 +1,12 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
+class HistoryEntry(BaseModel):
+    user_text: str = Field(default="", description="Text from the user.")
+    operator_response: str = Field(default="", description="Response from the operator.")
+    timestamp: str = Field(default="", description="Timestamp of the conversation turn.")
+    role: str = Field(default="unknown", description="Role of the speaker (user/assistant/unknown).")
+
 class UserMessageInput(BaseModel):
     session_id: str = Field(..., description="Unique identifier for the conversation session.")
     user_text: str = Field(..., description="The latest message from the user in Russian.")
@@ -37,4 +43,10 @@ class ProcessingResultOutput(BaseModel):
     qa_feedback: Optional[AgentResponse] = Field(default=None, description="Quality assurance feedback.")
     consolidated_output: Optional[str] = Field(
         default=None, description="Consolidated summary of processing for quick reference."
+    )
+    conversation_history: Optional[List[HistoryEntry]] = Field(
+        default=None, description="Recent conversation history for the session."
+    )
+    history_storage_status: Optional[bool] = Field(
+        default=True, description="Status of storing the current conversation turn to history."
     )

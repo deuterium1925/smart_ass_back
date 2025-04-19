@@ -169,6 +169,7 @@ class VectorDBService:
     async def store_conversation_turn(self, session_id: str, user_text: str, operator_response: str = "", timestamp: str = "") -> bool:
         """
         Store a single conversation turn in the history collection for long-term memory.
+        Returns True if successful, False otherwise, with detailed logging for failures.
         """
         try:
             app_logger.debug(f"Storing conversation turn for session {session_id}")
@@ -204,6 +205,7 @@ class VectorDBService:
     async def retrieve_conversation_history(self, session_id: str, limit: int = 10) -> List[Dict]:
         """
         Retrieve conversation history for a given session_id from the history collection.
+        Improved role determination and timestamp sorting with fallback for missing/invalid data.
         """
         try:
             app_logger.debug(f"Retrieving conversation history for session {session_id}")
@@ -220,11 +222,23 @@ class VectorDBService:
                     "user_text": point.payload.get("user_text", ""),
                     "operator_response": point.payload.get("operator_response", ""),
                     "timestamp": point.payload.get("timestamp", ""),
-                    "role": "user" if point.payload.get("user_text") else "assistant"
+                    # Improved role logic: Check for non-empty content
+                    "role": "user" if point.payload.get("user_text", "") != ""
+                            else "assistant" if point.payload.get("operator_response", "") != ""
+                            else "unknown"
                 }
                 for point in search_result[0]  # search_result[0] contains the list of points
             ]
-            history.sort(key=lambda x: x.get("timestamp", ""), reverse=False)  # Sort by timestamp if available
+            # Log warnings for ambiguous roles
+            for entry in history:
+                if entry["role"] == "unknown":
+                    app_logger.warning(f"Ambiguous role for history entry in session {session_id}: {entry}")
+
+            # Sort by timestamp with fallback for missing or invalid values
+            history.sort(
+                key=lambda x: x.get("timestamp", "0"),  # Fallback to "0" if timestamp is missing
+                reverse=False
+            )
             app_logger.info(f"Retrieved {len(history)} conversation turns for session {session_id}")
             return history
         except Exception as e:
