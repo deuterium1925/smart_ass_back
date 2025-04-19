@@ -1,45 +1,43 @@
-# app/models/schemas.py
-
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
 class Customer(BaseModel):
-    phone_number: str = Field(..., description="Unique identifier for the customer (e.g., '8-916-999-99-99')")
-    is_mts_subscriber: bool = Field(default=False, description="Whether the customer is an MTS subscriber")
-    tariff: str = Field(default="", description="Tariff plan (e.g., 'Convergent Tariff Plan №7')")
-    mobile_service: bool = Field(default=False, description="Has mobile service")
-    home_internet: bool = Field(default=False, description="Has home internet")
-    home_tv: bool = Field(default=False, description="Has home TV")
-    home_phone: bool = Field(default=False, description="Has home phone")
-    device: str = Field(default="", description="Device used (e.g., 'iPhone 16 Pro 256 GB')")
-    os: str = Field(default="", description="Operating system and version (e.g., 'iOS 18.4')")
-    is_my_mts_app_user: bool = Field(default=False, description="Uses My MTS app")
-    is_personal_cabinet_user: bool = Field(default=False, description="Uses Personal Cabinet")
-    is_mts_bank_app_user: bool = Field(default=False, description="Uses MTS Bank app")
-    is_mts_money_app_user: bool = Field(default=False, description="Uses MTS Money app")
-    subscriptions: str = Field(default="none", description="Active subscriptions on the number")
-    mts_premium: bool = Field(default=False, description="Has MTS Premium")
-    mts_cashback: bool = Field(default=False, description="Has MTS Cashback")
-    protector_basic: bool = Field(default=False, description="Has Protector Basic")
-    protector_plus: bool = Field(default=False, description="Has Protector Plus")
-    kion_subscription: bool = Field(default=False, description="Has separate Kion subscription")
-    music_subscription: bool = Field(default=False, description="Has separate Music subscription")
-    strings_subscription: bool = Field(default=False, description="Has separate Strings subscription")
-    mts_bank_debit_card: bool = Field(default=False, description="Has MTS Bank debit card")
-    mts_bank_credit_card: bool = Field(default=False, description="Has MTS Bank credit card")
-    mts_money_debit_card: bool = Field(default=False, description="Has MTS Money debit card")
-    mts_money_credit_card: bool = Field(default=False, description="Has MTS Money credit card")
-    mts_money_virtual_card: bool = Field(default=False, description="Has MTS Money virtual card")
-    created_at: str = Field(default="", description="Timestamp of customer creation")
+    phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
+    is_mts_subscriber: bool = Field(default=False, description="Whether the customer is an MTS subscriber.")
+    tariff_plan: Optional[str] = Field(default=None, description="Tariff plan of the customer (e.g., convergent plan).")
+    has_mobile: bool = Field(default=False, description="Whether the customer has mobile services.")
+    has_home_internet: bool = Field(default=False, description="Whether the customer has home internet.")
+    has_home_tv: bool = Field(default=False, description="Whether the customer has home TV services.")
+    has_home_phone: bool = Field(default=False, description="Whether the customer has a home phone.")
+    device: Optional[str] = Field(default=None, description="Customer's device (e.g., iPhone 16 Pro 256 GB).")
+    os: Optional[str] = Field(default=None, description="Operating system and version (e.g., iOS 18.4).")
+    uses_my_mts_app: bool = Field(default=False, description="Whether the customer uses the My MTS app.")
+    uses_personal_account: bool = Field(default=False, description="Whether the customer uses a personal account.")
+    uses_mts_bank_app: bool = Field(default=False, description="Whether the customer uses the MTS Bank app.")
+    uses_mts_money_app: bool = Field(default=False, description="Whether the customer uses the MTS Money app.")
+    subscriptions_and_services: Optional[str] = Field(default=None, description="Subscriptions and services on the number.")
+    has_mts_premium: bool = Field(default=False, description="Whether the customer has MTS Premium.")
+    has_mts_cashback: bool = Field(default=False, description="Whether the customer has MTS Cashback.")
+    has_defender_basic: bool = Field(default=False, description="Whether the customer has Defender Basic.")
+    has_defender_plus: bool = Field(default=False, description="Whether the customer has Defender+.")
+    has_kion_subscription: bool = Field(default=False, description="Whether the customer has a separate Kion subscription.")
+    has_music_subscription: bool = Field(default=False, description="Whether the customer has a separate Music subscription.")
+    has_strings_subscription: bool = Field(default=False, description="Whether the customer has a separate Strings subscription.")
+    has_mts_bank_debit_card: bool = Field(default=False, description="Whether the customer has an MTS Bank debit card.")
+    has_mts_bank_credit_card: bool = Field(default=False, description="Whether the customer has an MTS Bank credit card.")
+    has_mts_money_debit_card: bool = Field(default=False, description="Whether the customer has an MTS Money debit card.")
+    has_mts_money_credit_card: bool = Field(default=False, description="Whether the customer has an MTS Money credit card.")
+    has_mts_money_virtual_card: bool = Field(default=False, description="Whether the customer has an MTS Money virtual card.")
 
 class HistoryEntry(BaseModel):
+    phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     user_text: str = Field(default="", description="Text from the user.")
     operator_response: str = Field(default="", description="Response from the operator.")
     timestamp: str = Field(default="", description="Timestamp of the conversation turn.")
     role: str = Field(default="unknown", description="Role of the speaker (user/assistant/unknown).")
 
 class UserMessageInput(BaseModel):
-    phone_number: str = Field(..., description="Unique identifier for the customer.")  # Replaced session_id
+    phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     user_text: str = Field(..., description="The latest message from the user in Russian.")
     history: Optional[List[Dict[str, str]]] = Field(
         default=None, description="Previous conversation turns for context."
@@ -65,7 +63,7 @@ class KnowledgeResult(BaseModel):
     relevance_score: float = Field(..., description="Relevance score for the document.")
 
 class ProcessingResultOutput(BaseModel):
-    phone_number: str = Field(..., description="Unique identifier for the customer.")  # Replaced session_id
+    phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     intent: Optional[AgentResponse] = Field(default=None, description="Intent detection result.")
     emotion: Optional[AgentResponse] = Field(default=None, description="Emotion analysis result.")
     knowledge: Optional[AgentResponse] = Field(default=None, description="Knowledge retrieval result.")
@@ -80,7 +78,4 @@ class ProcessingResultOutput(BaseModel):
     )
     history_storage_status: Optional[bool] = Field(
         default=True, description="Status of storing the current conversation turn to history."
-    )
-    customer_data: Optional[Customer] = Field(
-        default=None, description="Customer profile data associated with the phone number."
     )
