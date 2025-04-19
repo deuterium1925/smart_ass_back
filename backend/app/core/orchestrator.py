@@ -6,7 +6,7 @@ from app.agents import (
     intent_agent, emotion_agent, knowledge_agent,
     action_agent, summary_agent, qa_agent
 )
-from app.utils.logger import app_logger
+from app.utils.logger import app_logger, log_history_storage, log_history_retrieval
 from app.services.vector_db import vector_db_service
 
 async def process_user_message(payload: UserMessageInput) -> ProcessingResultOutput:
@@ -42,6 +42,7 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
         # Retrieve conversation history from long-term memory
         history = await vector_db_service.retrieve_conversation_history(phone_number, limit=10)
         app_logger.debug(f"Retrieved history for customer {phone_number}: {len(history)} turns")
+        log_history_retrieval(phone_number, len(history))
         
         # Update payload history with retrieved history if not provided
         if not payload.history:
@@ -136,7 +137,10 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
         timestamp = str(int(time.time()))  # Use current timestamp as a simple ordering mechanism
         success = await vector_db_service.store_conversation_turn(phone_number, user_text, operator_response, timestamp)
         if not success:
+            log_history_storage(phone_number, False, "Failed to store conversation turn.")
             app_logger.warning(f"Failed to store conversation turn for customer {phone_number}; continuing processing")
+        else:
+            log_history_storage(phone_number, True, "Conversation turn stored successfully.")
 
         # Assemble final response
         consolidated_output = f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'"

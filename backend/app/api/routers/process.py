@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, status, Body
 from app.models.schemas import UserMessageInput, ProcessingResultOutput
 from app.core.orchestrator import process_user_message
-from app.utils.logger import app_logger
+from app.utils.logger import app_logger, log_message_processing
 
 router = APIRouter()
 
@@ -19,10 +19,12 @@ async def handle_process_message(
     Endpoint to process an incoming user message for a specific customer identified by phone_number.
     """
     try:
-        app_logger.info(f"Processing message for customer {payload.phone_number}")
+        log_message_processing(payload.phone_number, "STARTED", "Initiating message processing.")
         result = await process_user_message(payload)
+        log_message_processing(payload.phone_number, "COMPLETED", "Message processing completed successfully.")
         return result
     except Exception as e:
+        log_message_processing(payload.phone_number, "FAILED", f"Error during processing: {str(e)}")
         app_logger.error(f"Error processing message for customer {payload.phone_number}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

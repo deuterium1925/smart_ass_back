@@ -13,6 +13,16 @@ settings = get_settings()
 
 app = FastAPI(
     title="Smart Assistant Backend API",
+    description="""
+    **Smart Assistant Backend API** is a multi-agent LLM system designed to support contact center operators by processing customer queries in real-time.
+    This API enables interaction with customer data and dialogue history using phone numbers as unique identifiers.
+    Key features include:
+    - **Customer Management**: Create and retrieve customer profiles with detailed attributes for personalized support.
+    - **Dialogue Processing**: Process customer messages, retrieve conversation history, and generate tailored suggestions for operators.
+    - **Personalization**: Integrate customer data (e.g., tariff plans, subscriptions) into agent suggestions for context-aware responses.
+    
+    All endpoints require a valid phone number as the customer identifier to ensure data consistency and integrity.
+    """,
 )
 
 # Include API routers
@@ -21,7 +31,7 @@ app.include_router(customers_router.router, prefix="/api/v1/customers", tags=["C
 
 @app.get("/health", tags=["Health"])
 async def health_check():
-    """Basic health check endpoint."""
+    """Basic health check endpoint to verify API status."""
     return {"status": "ok"}
 
 async def generate_embeddings_batch(entries: List[dict], batch_size: int = 50) -> List[tuple]:
