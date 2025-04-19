@@ -84,7 +84,10 @@ let
           # https://github.com/compose-spec/compose-spec/blob/main/develop.md
           paths.auto-deploy = {
             wantedBy = [ "default.target" ];
-            pathConfig.PathChanged = "%h/${dirName}";
+            pathConfig.PathChanged = [
+              "%h/${dirName}"
+              "%h/${dirName}/.git/refs/heads/master"
+            ];
             pathConfig.TriggerLimitIntervalSec = "5s";
           };
 
