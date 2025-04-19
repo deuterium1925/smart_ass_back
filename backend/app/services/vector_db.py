@@ -18,7 +18,7 @@ class VectorDBService:
         )
         self.collection_name = self.settings.KNOWLEDGE_COLLECTION_NAME
         self.history_collection_name = "conversation_history"
-        self.customers_collection_name = "customers"  # New collection for customer data
+        self.customers_collection_name = "customers"
         self.embedding_model = self.settings.EMBEDDING_MODEL
         self.vector_size = None  # Will be set dynamically after first embedding
         self.timeout = aiohttp.ClientTimeout(total=self.settings.REQUEST_TIMEOUT)
@@ -179,53 +179,69 @@ class VectorDBService:
             app_logger.error(f"Error querying Vector DB: {e}")
             return []
 
-    async def store_conversation_turn(self, phone_number: str, user_text: str, operator_response: str = "", timestamp: str = "") -> bool:
+    async def store_conversation_turn(self, phone_number: str, user_text: str, operator_response: str = "", timestamp: str = "", session_id: Optional[str] = None) -> bool:
         """
         Store a single conversation turn in the history collection for long-term memory.
+        Uses phone_number as the primary identifier, with session_id as a fallback for backward compatibility.
         Returns True if successful, False otherwise, with detailed logging for failures.
         """
+        identifier = phone_number if phone_number else session_id if session_id else "unknown"
         try:
-            app_logger.debug(f"Storing conversation turn for customer {phone_number}")
+            app_logger.debug(f"Storing conversation turn for identifier {identifier}")
             content = f"User: {user_text}\nOperator: {operator_response}" if operator_response else f"User: {user_text}"
             embedding = await self.get_embedding(content)
             if embedding is None:
-                app_logger.error(f"Failed to generate embedding for conversation turn for customer {phone_number}")
+                app_logger.error(f"Failed to generate embedding for conversation turn for identifier {identifier}")
                 return False
 
-            point_id = hashlib.md5(f"{phone_number}_{timestamp}_{content}".encode('utf-8')).hexdigest()
+            point_id = hashlib.md5(f"{identifier}_{timestamp}_{content}".encode('utf-8')).hexdigest()
+            payload = {
+                "phone_number": phone_number if phone_number else "",
+                "user_text": user_text,
+                "operator_response": operator_response,
+                "timestamp": timestamp,
+                "content": content
+            }
+            # Include session_id in payload for backward compatibility if provided
+            if session_id:
+                payload["session_id"] = session_id
+
             point = PointStruct(
                 id=point_id,
                 vector=embedding,
-                payload={
-                    "phone_number": phone_number,
-                    "user_text": user_text,
-                    "operator_response": operator_response,
-                    "timestamp": timestamp,
-                    "content": content
-                }
+                payload=payload
             )
             await asyncio.to_thread(
                 self.client.upsert,
                 collection_name=self.history_collection_name,
                 points=[point]
             )
-            app_logger.info(f"Stored conversation turn for customer {phone_number}")
+            app_logger.info(f"Stored conversation turn for identifier {identifier}")
             return True
         except Exception as e:
-            app_logger.error(f"Error storing conversation turn for customer {phone_number}: {e}")
+            app_logger.error(f"Error storing conversation turn for identifier {identifier}: {e}")
             return False
 
-    async def retrieve_conversation_history(self, phone_number: str, limit: int = 10) -> List[Dict]:
+    async def retrieve_conversation_history(self, phone_number: str, limit: int = 10, session_id: Optional[str] = None) -> List[Dict]:
         """
         Retrieve conversation history for a given phone_number from the history collection.
+        Falls back to session_id for backward compatibility if phone_number yields no results.
         Improved role determination and timestamp sorting with fallback for missing/invalid data.
         """
+        identifier = phone_number if phone_number else session_id if session_id else "unknown"
         try:
-            app_logger.debug(f"Retrieving conversation history for customer {phone_number}")
+            app_logger.debug(f"Retrieving conversation history for identifier {identifier}")
+            filter_key = "phone_number" if phone_number else "session_id" if session_id else None
+            filter_value = phone_number if phone_number else session_id if session_id else None
+
+            if not filter_key or not filter_value:
+                app_logger.error(f"No valid identifier provided for retrieving history")
+                return []
+
             search_result = await asyncio.to_thread(
                 self.client.scroll,
                 collection_name=self.history_collection_name,
-                scroll_filter={"must": [{"key": "phone_number", "match": {"value": phone_number}}]},
+                scroll_filter={"must": [{"key": filter_key, "match": {"value": filter_value}}]},
                 limit=limit,
                 with_payload=True,
                 with_vectors=False
@@ -246,17 +262,17 @@ class VectorDBService:
             # Log warnings for ambiguous roles
             for entry in history:
                 if entry["role"] == "unknown":
-                    app_logger.warning(f"Ambiguous role for history entry for customer {phone_number}: {entry}")
+                    app_logger.warning(f"Ambiguous role for history entry for identifier {identifier}: {entry}")
 
             # Sort by timestamp with fallback for missing or invalid values
             history.sort(
                 key=lambda x: x.get("timestamp", "0"),  # Fallback to "0" if timestamp is missing
                 reverse=False
             )
-            app_logger.info(f"Retrieved {len(history)} conversation turns for customer {phone_number}")
+            app_logger.info(f"Retrieved {len(history)} conversation turns for identifier {identifier}")
             return history
         except Exception as e:
-            app_logger.error(f"Error retrieving conversation history for customer {phone_number}: {e}")
+            app_logger.error(f"Error retrieving conversation history for identifier {identifier}: {e}")
             return []
 
     async def upsert_customer(self, customer: Customer) -> bool:

@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import List, Dict # Added Dict here
+from typing import List
 from app.models.schemas import UserMessageInput, ProcessingResultOutput, AgentResponse, Suggestion
 from app.agents import (
     intent_agent, emotion_agent, knowledge_agent,
@@ -13,17 +13,20 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
     """
     Orchestrates the processing of a user message through multiple specialized agents.
     Handles individual agent failures gracefully to ensure partial results are returned.
-    Incorporates long-term memory by retrieving and updating conversation history.
+    Incorporates long-term memory by retrieving and updating conversation history using phone_number,
+    with fallback to session_id for backward compatibility.
     """
     user_text = payload.user_text
-    session_id = payload.session_id
-    app_logger.info(f"Orchestrator: Processing message for session {session_id}")
+    phone_number = payload.phone_number
+    session_id = payload.session_id if hasattr(payload, 'session_id') else None
+    identifier = phone_number if phone_number else session_id if session_id else "unknown"
+    app_logger.info(f"Orchestrator: Processing message for identifier {identifier}")
     timeout = 30.0
 
     try:
         # Retrieve conversation history from long-term memory
-        history = await vector_db_service.retrieve_conversation_history(session_id, limit=10)
-        app_logger.debug(f"Retrieved history for session {session_id}: {len(history)} turns")
+        history = await vector_db_service.retrieve_conversation_history(phone_number, limit=10, session_id=session_id)
+        app_logger.debug(f"Retrieved history for identifier {identifier}: {len(history)} turns")
         
         # Update payload history with retrieved history if not provided
         if not payload.history:
@@ -61,18 +64,18 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
 
         # Log individual errors for debugging
         if isinstance(results[0], Exception):
-            app_logger.error(f"Intent Agent failed for session {session_id}: {str(results[0])}")
+            app_logger.error(f"Intent Agent failed for identifier {identifier}: {str(results[0])}")
         if isinstance(results[1], Exception):
-            app_logger.error(f"Emotion Agent failed for session {session_id}: {str(results[1])}")
+            app_logger.error(f"Emotion Agent failed for identifier {identifier}: {str(results[1])}")
         if isinstance(results[2], Exception):
-            app_logger.error(f"Knowledge Agent failed for session {session_id}: {str(results[2])}")
+            app_logger.error(f"Knowledge Agent failed for identifier {identifier}: {str(results[2])}")
 
-        app_logger.debug(f"Session {session_id} - Intent: {intent_result.result}, Emotion: {emotion_result.result}")
+        app_logger.debug(f"Identifier {identifier} - Intent: {intent_result.result}, Emotion: {emotion_result.result}")
 
         # Extract operator response from payload if available, otherwise use a fallback
         operator_response = getattr(payload, 'operator_response', '')
         if not operator_response:
-            app_logger.debug(f"Session {session_id} - No operator response provided, using empty string as fallback")
+            app_logger.debug(f"Identifier {identifier} - No operator response provided, using empty string as fallback")
 
         # Run dependent agents (Action Suggestion, Summary, QA) in parallel
         dependent_tasks = [
@@ -107,21 +110,22 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
 
         # Log errors for dependent tasks
         if isinstance(dependent_results[0], Exception):
-            app_logger.error(f"Action Suggestion Agent failed for session {session_id}: {str(dependent_results[0])}")
+            app_logger.error(f"Action Suggestion Agent failed for identifier {identifier}: {str(dependent_results[0])}")
         if isinstance(dependent_results[1], Exception):
-            app_logger.error(f"Summary Agent failed for session {session_id}: {str(dependent_results[1])}")
+            app_logger.error(f"Summary Agent failed for identifier {identifier}: {str(dependent_results[1])}")
         if isinstance(dependent_results[2], Exception):
-            app_logger.error(f"QA Agent failed for session {session_id}: {str(dependent_results[2])}")
+            app_logger.error(f"QA Agent failed for identifier {identifier}: {str(dependent_results[2])}")
 
         # Store the current conversation turn in long-term memory
         timestamp = str(int(time.time()))  # Use current timestamp as a simple ordering mechanism
-        success = await vector_db_service.store_conversation_turn(session_id, user_text, operator_response, timestamp)
+        success = await vector_db_service.store_conversation_turn(phone_number, user_text, operator_response, timestamp, session_id=session_id)
         if not success:
-            app_logger.warning(f"Failed to store conversation turn for session {session_id}; continuing processing")
+            app_logger.warning(f"Failed to store conversation turn for identifier {identifier}; continuing processing")
 
         # Assemble final response
         output = ProcessingResultOutput(
-            session_id=session_id,
+            phone_number=phone_number,
+            session_id=session_id,  # Include for backward compatibility
             intent=intent_result,
             emotion=emotion_result,
             knowledge=knowledge_result,
@@ -132,18 +136,20 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             conversation_history=history,  # Include retrieved history
             history_storage_status=success  # Indicate storage status
         )
-        app_logger.info(f"Orchestrator: Completed processing for session {session_id}")
+        app_logger.info(f"Orchestrator: Completed processing for identifier {identifier}")
         return output
 
     except asyncio.TimeoutError as e:
-        app_logger.error(f"Timeout during agent processing for session {session_id}")
+        app_logger.error(f"Timeout during agent processing for identifier {identifier}")
         return ProcessingResultOutput(
+            phone_number=phone_number,
             session_id=session_id,
             consolidated_output="Ошибка: истекло время ожидания обработки"
         )
     except Exception as e:
-        app_logger.error(f"Orchestration failed for session {session_id}: {e}")
+        app_logger.error(f"Orchestration failed for identifier {identifier}: {e}")
         return ProcessingResultOutput(
+            phone_number=phone_number,
             session_id=session_id,
             consolidated_output=f"Ошибка обработки: {str(e)}"
         )

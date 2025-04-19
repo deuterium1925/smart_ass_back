@@ -77,6 +77,7 @@ class HistoryEntry(BaseModel):
 class UserMessageInput(BaseModel):
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     user_text: str = Field(..., description="The latest message from the user in Russian.")
+    session_id: Optional[str] = Field(default=None, description="Legacy session ID for backward compatibility (temporary).")
     history: Optional[List[Dict[str, str]]] = Field(
         default=None, description="Previous conversation turns for context."
     )
@@ -102,6 +103,7 @@ class KnowledgeResult(BaseModel):
 
 class ProcessingResultOutput(BaseModel):
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
+    session_id: Optional[str] = Field(default=None, description="Legacy session ID for backward compatibility (temporary).")
     intent: Optional[AgentResponse] = Field(default=None, description="Intent detection result.")
     emotion: Optional[AgentResponse] = Field(default=None, description="Emotion analysis result.")
     knowledge: Optional[AgentResponse] = Field(default=None, description="Knowledge retrieval result.")
