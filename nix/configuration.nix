@@ -76,6 +76,12 @@ let
           dirName = "mts_hackathon";
         in
         {
+          # TODO it's a nonrecursive solution :(
+          #
+          # there is a better solution (podman compose doesn't support it), but I
+          # don't have time for that:
+          #
+          # https://github.com/compose-spec/compose-spec/blob/main/develop.md
           paths.auto-deploy = {
             wantedBy = [ "default.target" ];
             pathConfig.PathChanged = "%h/${dirName}";
