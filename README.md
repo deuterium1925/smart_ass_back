@@ -19,6 +19,15 @@ podman compose up -d
 ```
 ### misc
 
-Restart backend: podman compose -f ~/mts_hackathon/docker-compose.yaml restart backend
-Restart backend with rebuild: podman compose -f ~/mts_hackathon/docker-compose.yaml down backend && podman compose -f ~/mts_hackathon/docker-compose.yaml up backend -d --build --remove-orphans
-Restart backend with rebuild without stopping: podman compose -f ~/mts_hackathon/docker-compose.yaml up -d --build --force-recreate
+- Restart backend: 
+```bash
+podman compose -f ~/mts_hackathon/docker-compose.yaml restart backend
+```
+- Restart backend with rebuild: 
+```bash
+podman compose -f ~/mts_hackathon/docker-compose.yaml down backend && podman compose -f ~/mts_hackathon/docker-compose.yaml up backend -d --build --remove-orphans
+```
+- Restart backend with rebuild without stopping: 
+```bash
+podman compose -f ~/mts_hackathon/docker-compose.yaml up -d --build --force-recreate
+```
