@@ -71,12 +71,38 @@ let
         };
       };
 
+      systemd.user =
+        let
+          dirName = "mts_hackathon";
+        in
+        {
+          paths.auto-deploy = {
+            wantedBy = [ "default.target" ];
+            pathConfig.PathChanged = "%h/${dirName}";
+            pathConfig.TriggerLimitIntervalSec = "5s";
+          };
+
+          services.auto-deploy = {
+            path = [
+              config.virtualisation.podman.package
+              pkgs.docker-compose
+            ];
+            script = ''
+              set +e
+              podman compose -f ~/${dirName}/docker-compose.yaml up -d --build --remove-orphans || true
+            '';
+            serviceConfig.Type = "oneshot";
+            serviceConfig.Restart = "no";
+          };
+        };
+
       environment = {
         sessionVariables = {
           LESS = "FRSMi";
           SYSTEMD_LESS = "FRSMi";
         };
         systemPackages = with pkgs; [
+          docker-compose
           ripgrep
           fd
           tree
