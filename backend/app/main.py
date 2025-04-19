@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.api.routers import process as process_router
-from app.api.routers import customers as customers_router  # Import the new customers router
+from app.api.routers import customers as customers_router
 from app.core.config import get_settings
 from app.services.vector_db import vector_db_service
 from app.utils.logger import app_logger
@@ -53,7 +53,7 @@ async def upsert_batch_to_qdrant(points: List[PointStruct], batch_size: int = 10
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize services on startup."""
+    """Initialize services on startup and perform optional cleanup of orphaned history entries."""
     app_logger.info("Starting up Smart Assistant Backend...")
     await vector_db_service.ensure_collection()
     
@@ -76,6 +76,12 @@ async def startup_event():
             collection_name=vector_db_service.customers_collection_name
         )
         app_logger.info(f"Collection {vector_db_service.customers_collection_name} status: {collection_info_customers.points_count} points")
+
+        # Optional: Perform cleanup of orphaned history entries during startup
+        # This can be disabled or moved to a scheduled task if not desired on every startup
+        app_logger.info("Performing cleanup of orphaned conversation history entries...")
+        deleted_count = await vector_db_service.delete_orphaned_history()
+        app_logger.info(f"Cleanup completed: {deleted_count} orphaned history entries deleted.")
 
         # Log the size of the loaded knowledge base
         app_logger.info(f"Loaded {len(KNOWLEDGE_BASE)} knowledge base entries for indexing.")
