@@ -16,16 +16,19 @@ class VectorDBService:
             timeout=10.0
         )
         self.collection_name = self.settings.KNOWLEDGE_COLLECTION_NAME
+        self.history_collection_name = "conversation_history"  # New collection for history
         self.embedding_model = self.settings.EMBEDDING_MODEL
         self.vector_size = None  # Will be set dynamically after first embedding
         self.timeout = aiohttp.ClientTimeout(total=self.settings.REQUEST_TIMEOUT)
 
     async def ensure_collection(self):
-        """Ensure the knowledge base collection exists in Qdrant with dynamic vector size."""
+        """Ensure the knowledge base and history collections exist in Qdrant with dynamic vector size."""
         try:
             collections = await asyncio.to_thread(self.client.get_collections)
-            if self.collection_name not in [c.name for c in collections.collections]:
-                # If vector_size is not set, generate a sample embedding to get the dimension
+            collection_names = [c.name for c in collections.collections]
+
+            # Handle knowledge base collection
+            if self.collection_name not in collection_names:
                 if self.vector_size is None:
                     app_logger.info("Vector size not set, generating a sample embedding to determine dimension...")
                     sample_embedding = await self.get_embedding("тест")
@@ -44,7 +47,6 @@ class VectorDBService:
                 app_logger.info(f"Created collection {self.collection_name} in Qdrant with vector size {self.vector_size}")
             else:
                 app_logger.debug(f"Collection {self.collection_name} already exists")
-                # Retrieve collection info to update vector_size if not set
                 if self.vector_size is None:
                     collection_info = await asyncio.to_thread(
                         self.client.get_collection,
@@ -52,8 +54,19 @@ class VectorDBService:
                     )
                     self.vector_size = collection_info.config.params.vectors.size
                     app_logger.info(f"Retrieved vector size from existing collection: {self.vector_size}")
+
+            # Handle conversation history collection
+            if self.history_collection_name not in collection_names:
+                await asyncio.to_thread(
+                    self.client.create_collection,
+                    collection_name=self.history_collection_name,
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
+                )
+                app_logger.info(f"Created collection {self.history_collection_name} in Qdrant for conversation history")
+            else:
+                app_logger.debug(f"Collection {self.history_collection_name} already exists")
         except Exception as e:
-            app_logger.error(f"Error creating or retrieving collection in Qdrant: {e}")
+            app_logger.error(f"Error creating or retrieving collections in Qdrant: {e}")
 
     async def get_embedding(self, text: str) -> Optional[List[float]]:
         """Generate embedding for the given text using MWS API with stricter response validation."""
@@ -74,7 +87,6 @@ class VectorDBService:
                     )
                     if response.status == 200:
                         data = await response.json()
-                        # Validate response structure
                         if not isinstance(data, dict):
                             app_logger.error("MWS Embedding API returned invalid response type, not a dictionary")
                             retries += 1
@@ -91,17 +103,14 @@ class VectorDBService:
                             await asyncio.sleep(2 ** retries)
                             continue
                         embedding = data["data"][0]["embedding"]
-                        # Validate embedding content (non-empty list of floats)
                         if not all(isinstance(x, (int, float)) for x in embedding):
                             app_logger.error("MWS Embedding API returned invalid embedding values, not all numbers")
                             retries += 1
                             await asyncio.sleep(2 ** retries)
                             continue
-                        # If vector_size is not set, update it dynamically
                         if self.vector_size is None:
                             self.vector_size = len(embedding)
                             app_logger.info(f"Set vector size dynamically to {self.vector_size} based on first embedding")
-                        # Validate embedding dimension matches expected size if already set
                         elif len(embedding) != self.vector_size:
                             app_logger.error(f"MWS Embedding API returned embedding of size {len(embedding)}, expected {self.vector_size}")
                             retries += 1
@@ -139,14 +148,15 @@ class VectorDBService:
                 collection_name=self.collection_name,
                 query_vector=query_vector,
                 limit=top_k,
-                with_payload=True  # Ensure payload fields (like 'query') are returned
+                with_payload=True
             )
             results = [
                 {
-                    "id": hit.id,  # Hashed ID from Qdrant
-                    "query": hit.payload.get("query", "unknown"),  # Original query text from payload
+                    "id": hit.id,
+                    "query": hit.payload.get("query", "unknown"),
                     "text": hit.payload.get("text", ""),
-                    "score": hit.score
+                    "score": hit.score,
+                    "sources": hit.payload.get("sources", "")
                 }
                 for hit in search_result
             ]
@@ -154,6 +164,71 @@ class VectorDBService:
             return results
         except Exception as e:
             app_logger.error(f"Error querying Vector DB: {e}")
+            return []
+
+    async def store_conversation_turn(self, session_id: str, user_text: str, operator_response: str = "", timestamp: str = "") -> bool:
+        """
+        Store a single conversation turn in the history collection for long-term memory.
+        """
+        try:
+            app_logger.debug(f"Storing conversation turn for session {session_id}")
+            content = f"User: {user_text}\nOperator: {operator_response}" if operator_response else f"User: {user_text}"
+            embedding = await self.get_embedding(content)
+            if embedding is None:
+                app_logger.error(f"Failed to generate embedding for conversation turn in session {session_id}")
+                return False
+
+            point_id = hashlib.md5(f"{session_id}_{timestamp}_{content}".encode('utf-8')).hexdigest()
+            point = PointStruct(
+                id=point_id,
+                vector=embedding,
+                payload={
+                    "session_id": session_id,
+                    "user_text": user_text,
+                    "operator_response": operator_response,
+                    "timestamp": timestamp,
+                    "content": content
+                }
+            )
+            await asyncio.to_thread(
+                self.client.upsert,
+                collection_name=self.history_collection_name,
+                points=[point]
+            )
+            app_logger.info(f"Stored conversation turn for session {session_id}")
+            return True
+        except Exception as e:
+            app_logger.error(f"Error storing conversation turn for session {session_id}: {e}")
+            return False
+
+    async def retrieve_conversation_history(self, session_id: str, limit: int = 10) -> List[Dict]:
+        """
+        Retrieve conversation history for a given session_id from the history collection.
+        """
+        try:
+            app_logger.debug(f"Retrieving conversation history for session {session_id}")
+            search_result = await asyncio.to_thread(
+                self.client.scroll,
+                collection_name=self.history_collection_name,
+                scroll_filter={"must": [{"key": "session_id", "match": {"value": session_id}}]},
+                limit=limit,
+                with_payload=True,
+                with_vectors=False
+            )
+            history = [
+                {
+                    "user_text": point.payload.get("user_text", ""),
+                    "operator_response": point.payload.get("operator_response", ""),
+                    "timestamp": point.payload.get("timestamp", ""),
+                    "role": "user" if point.payload.get("user_text") else "assistant"
+                }
+                for point in search_result[0]  # search_result[0] contains the list of points
+            ]
+            history.sort(key=lambda x: x.get("timestamp", ""), reverse=False)  # Sort by timestamp if available
+            app_logger.info(f"Retrieved {len(history)} conversation turns for session {session_id}")
+            return history
+        except Exception as e:
+            app_logger.error(f"Error retrieving conversation history for session {session_id}: {e}")
             return []
 
 vector_db_service = VectorDBService()

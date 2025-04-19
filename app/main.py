@@ -29,7 +29,6 @@ async def startup_event():
     
     # Check if the collection already has points to avoid duplicate indexing
     try:
-        # Wrap synchronous Qdrant client call in asyncio.to_thread
         collection_info = await asyncio.to_thread(
             vector_db_service.client.get_collection,
             collection_name=vector_db_service.collection_name
@@ -42,7 +41,7 @@ async def startup_event():
             failed_indices = 0
             for entry in KNOWLEDGE_BASE:
                 query_text = entry["query"]
-                point_id = vector_db_service.generate_point_id(query_text)  # Use hash-based ID
+                point_id = vector_db_service.generate_point_id(query_text)
                 retries = 0
                 embedding = None
                 while retries < settings.MAX_RETRIES and embedding is None:
@@ -50,18 +49,17 @@ async def startup_event():
                     if embedding is None:
                         retries += 1
                         app_logger.warning(f"Retry {retries}/{settings.MAX_RETRIES} for embedding of query: {query_text[:30]}...")
-                        await asyncio.sleep(2 ** retries)  # Exponential backoff
+                        await asyncio.sleep(2 ** retries)
                 if embedding:
                     point = PointStruct(
-                        id=point_id,  # Use hashed ID instead of numerical index
+                        id=point_id,
                         vector=embedding,
                         payload={
-                            "query": query_text,  # Store original query text for mapping
+                            "query": query_text,
                             "text": entry["correct_answer"],
-                            "sources": entry["correct_sources"]  # Add sources to payload
+                            "sources": entry["correct_sources"]
                         }
                     )
-                    # Wrap synchronous upsert call in asyncio.to_thread
                     await asyncio.to_thread(
                         vector_db_service.client.upsert,
                         collection_name=vector_db_service.collection_name,

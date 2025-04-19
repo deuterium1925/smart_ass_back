@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import List
 from app.models.schemas import UserMessageInput, ProcessingResultOutput, AgentResponse, Suggestion
 from app.agents import (
@@ -12,6 +13,7 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
     """
     Orchestrates the processing of a user message through multiple specialized agents.
     Handles individual agent failures gracefully to ensure partial results are returned.
+    Incorporates long-term memory by retrieving and updating conversation history.
     """
     user_text = payload.user_text
     session_id = payload.session_id
@@ -19,6 +21,17 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
     timeout = 30.0
 
     try:
+        # Retrieve conversation history from long-term memory
+        history = await vector_db_service.retrieve_conversation_history(session_id, limit=10)
+        app_logger.debug(f"Retrieved history for session {session_id}: {len(history)} turns")
+        
+        # Update payload history with retrieved history if not provided
+        if not payload.history:
+            payload.history = [
+                {"role": turn["role"], "content": turn["user_text"] if turn["role"] == "user" else turn["operator_response"]}
+                for turn in history
+            ]
+
         # Run independent agents in parallel and handle exceptions individually
         tasks = [
             asyncio.create_task(intent_agent.detect_intent(user_text)),
@@ -99,6 +112,10 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             app_logger.error(f"Summary Agent failed for session {session_id}: {str(dependent_results[1])}")
         if isinstance(dependent_results[2], Exception):
             app_logger.error(f"QA Agent failed for session {session_id}: {str(dependent_results[2])}")
+
+        # Store the current conversation turn in long-term memory
+        timestamp = str(int(time.time()))  # Use current timestamp as a simple ordering mechanism
+        await vector_db_service.store_conversation_turn(session_id, user_text, operator_response, timestamp)
 
         # Assemble final response
         output = ProcessingResultOutput(
