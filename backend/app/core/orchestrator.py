@@ -12,6 +12,7 @@ from app.services.vector_db import vector_db_service
 async def process_user_message(payload: UserMessageInput) -> ProcessingResultOutput:
     """
     Orchestrates the processing of a user message through multiple specialized agents.
+    Fetches customer data before processing for personalized responses.
     Handles individual agent failures gracefully to ensure partial results are returned.
     Incorporates long-term memory by retrieving and updating conversation history using phone_number,
     with fallback to session_id for backward compatibility.
@@ -24,6 +25,19 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
     timeout = 30.0
 
     try:
+        # Fetch customer data if phone_number is provided
+        customer_data = None
+        customer_fetch_error = None
+        if phone_number:
+            app_logger.debug(f"Fetching customer data for {phone_number}")
+            customer_data = await vector_db_service.retrieve_customer(phone_number)
+            if not customer_data:
+                app_logger.warning(f"No customer data found for {phone_number}")
+                customer_fetch_error = f"Customer profile not found for phone number {phone_number}. Please create a profile for personalized suggestions."
+        else:
+            app_logger.warning("No phone number provided, skipping customer data retrieval")
+            customer_fetch_error = "No phone number provided for customer data retrieval."
+
         # Retrieve conversation history from long-term memory
         history = await vector_db_service.retrieve_conversation_history(phone_number, limit=10, session_id=session_id)
         app_logger.debug(f"Retrieved history for identifier {identifier}: {len(history)} turns")
@@ -78,9 +92,10 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             app_logger.debug(f"Identifier {identifier} - No operator response provided, using empty string as fallback")
 
         # Run dependent agents (Action Suggestion, Summary, QA) in parallel
+        # Pass customer_data to action_agent for personalized suggestions
         dependent_tasks = [
             asyncio.create_task(
-                action_agent.suggest_actions(intent_result, emotion_result, knowledge_result)
+                action_agent.suggest_actions(intent_result, emotion_result, knowledge_result, customer_data=customer_data)
             ),
             asyncio.create_task(
                 summary_agent.summarize_turn(user_text, intent_result, emotion_result, knowledge_result)
@@ -123,6 +138,10 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             app_logger.warning(f"Failed to store conversation turn for identifier {identifier}; continuing processing")
 
         # Assemble final response
+        consolidated_output = f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'"
+        if customer_fetch_error:
+            consolidated_output += f" | {customer_fetch_error}"
+
         output = ProcessingResultOutput(
             phone_number=phone_number,
             session_id=session_id,  # Include for backward compatibility
@@ -132,9 +151,10 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             suggestions=suggestions,
             summary=summary_result,
             qa_feedback=qa_feedback,
-            consolidated_output=f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'",
+            consolidated_output=consolidated_output,
             conversation_history=history,  # Include retrieved history
-            history_storage_status=success  # Indicate storage status
+            history_storage_status=success,  # Indicate storage status
+            customer_data=customer_data  # Include customer data for frontend
         )
         app_logger.info(f"Orchestrator: Completed processing for identifier {identifier}")
         return output
@@ -144,12 +164,14 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
         return ProcessingResultOutput(
             phone_number=phone_number,
             session_id=session_id,
-            consolidated_output="Ошибка: истекло время ожидания обработки"
+            consolidated_output="Ошибка: истекло время ожидания обработки",
+            customer_data=None
         )
     except Exception as e:
         app_logger.error(f"Orchestration failed for identifier {identifier}: {e}")
         return ProcessingResultOutput(
             phone_number=phone_number,
             session_id=session_id,
-            consolidated_output=f"Ошибка обработки: {str(e)}"
+            consolidated_output=f"Ошибка обработки: {str(e)}",
+            customer_data=None
         )

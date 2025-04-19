@@ -119,3 +119,6 @@ class ProcessingResultOutput(BaseModel):
     history_storage_status: Optional[bool] = Field(
         default=True, description="Status of storing the current conversation turn to history."
     )
+    customer_data: Optional[Customer] = Field(
+        default=None, description="Customer profile data for personalized processing."
+    )

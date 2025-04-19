@@ -17,7 +17,7 @@ app = FastAPI(
 
 # Include API routers
 app.include_router(process_router.router, prefix="/api/v1", tags=["Processing"])
-app.include_router(customers_router.router, prefix="/api/v1/customers", tags=["Customers"])  # Add customers router
+app.include_router(customers_router.router, prefix="/api/v1/customers", tags=["Customers"])
 
 @app.get("/health", tags=["Health"])
 async def health_check():
