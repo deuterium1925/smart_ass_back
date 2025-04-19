@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import List
+from typing import List, Dict # Added Dict here
 from app.models.schemas import UserMessageInput, ProcessingResultOutput, AgentResponse, Suggestion
 from app.agents import (
     intent_agent, emotion_agent, knowledge_agent,
