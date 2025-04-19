@@ -17,6 +17,7 @@
             passh
             age
             nixos-anywhere
+            uv
           ]);
       });
 
