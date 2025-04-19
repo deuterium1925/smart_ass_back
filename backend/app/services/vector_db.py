@@ -6,6 +6,7 @@ from qdrant_client.http.models import PointStruct, VectorParams, Distance
 from app.core.config import get_settings
 from app.utils.logger import app_logger
 from typing import List, Dict, Optional
+from app.models.schemas import Customer
 
 class VectorDBService:
     def __init__(self):
@@ -257,5 +258,63 @@ class VectorDBService:
         except Exception as e:
             app_logger.error(f"Error retrieving conversation history for customer {phone_number}: {e}")
             return []
+
+    async def upsert_customer(self, customer: Customer) -> bool:
+        """
+        Upsert a customer profile into the customers collection.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            app_logger.debug(f"Upserting customer profile for {customer.phone_number}")
+            # Generate an embedding for the phone number or a summary of customer data
+            embedding_text = f"Customer: {customer.phone_number}"
+            embedding = await self.get_embedding(embedding_text)
+            if embedding is None:
+                app_logger.error(f"Failed to generate embedding for customer {customer.phone_number}")
+                return False
+
+            # Use hashed phone number as point ID for uniqueness
+            point_id = self.generate_point_id(customer.phone_number)
+            point = PointStruct(
+                id=point_id,
+                vector=embedding,
+                payload=customer.dict()
+            )
+            await asyncio.to_thread(
+                self.client.upsert,
+                collection_name=self.customers_collection_name,
+                points=[point]
+            )
+            app_logger.info(f"Successfully upserted customer profile for {customer.phone_number}")
+            return True
+        except Exception as e:
+            app_logger.error(f"Error upserting customer profile for {customer.phone_number}: {e}")
+            return False
+
+    async def retrieve_customer(self, phone_number: str) -> Optional[Customer]:
+        """
+        Retrieve a customer profile by phone number from the customers collection.
+        Returns the Customer object if found, None otherwise.
+        """
+        try:
+            app_logger.debug(f"Retrieving customer profile for {phone_number}")
+            search_result = await asyncio.to_thread(
+                self.client.scroll,
+                collection_name=self.customers_collection_name,
+                scroll_filter={"must": [{"key": "phone_number", "match": {"value": phone_number}}]},
+                limit=1,
+                with_payload=True,
+                with_vectors=False
+            )
+            if search_result[0]:  # search_result[0] contains the list of points
+                customer_data = search_result[0][0].payload  # First result
+                app_logger.info(f"Retrieved customer profile for {phone_number}")
+                return Customer(**customer_data)
+            else:
+                app_logger.info(f"No customer found with phone number {phone_number}")
+                return None
+        except Exception as e:
+            app_logger.error(f"Error retrieving customer profile for {phone_number}: {e}")
+            return None
 
 vector_db_service = VectorDBService()

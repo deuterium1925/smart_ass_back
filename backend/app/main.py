@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from app.api.routers import process as process_router
+from app.api.routers import customers as customers_router  # Import the new customers router
 from app.core.config import get_settings
 from app.services.vector_db import vector_db_service
 from app.utils.logger import app_logger
@@ -16,6 +17,7 @@ app = FastAPI(
 
 # Include API routers
 app.include_router(process_router.router, prefix="/api/v1", tags=["Processing"])
+app.include_router(customers_router.router, prefix="/api/v1/customers", tags=["Customers"])  # Add customers router
 
 @app.get("/health", tags=["Health"])
 async def health_check():
