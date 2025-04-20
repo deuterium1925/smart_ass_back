@@ -22,6 +22,19 @@ async def suggest_actions(
     emotion = emotion_response.result.get("emotion", "unknown")
     emotion_confidence = emotion_response.confidence or 0.0
     
+    # Extract knowledge content if available
+    knowledge_content = ""
+    if knowledge_response.result.get("knowledge"):
+        knowledge_items = knowledge_response.result.get("knowledge", [])
+        if knowledge_items:
+            knowledge_content = knowledge_items[0].get("content", "")
+            if len(knowledge_content) > 500:  # Limit length to avoid overly long prompts
+                knowledge_content = knowledge_content[:500] + "..."
+        else:
+            knowledge_content = "Информация из базы знаний отсутствует."
+    else:
+        knowledge_content = "Информация из базы знаний отсутствует."
+    
     app_logger.info(f"Action Agent: Generating suggestions for intent={intent}, emotion={emotion}")
 
     # Build customer context for prompt if data is available
@@ -42,7 +55,7 @@ async def suggest_actions(
         app_logger.debug("No customer data provided, using generic suggestion logic")
         customer_context = "Информация о клиенте отсутствует. Используйте общие рекомендации без персонализации."
 
-    # Craft a structured prompt with customer context for better suggestion quality
+    # Craft a structured prompt with customer context and knowledge content for better suggestion quality
     prompt = f"""
     Вы - ассистент контакт-центра, помогающий оператору выбрать подходящие действия для клиента.
     Ваша задача - предложить 1-3 конкретных действия или ответа для оператора на основе намерения клиента, его эмоций и информации из базы знаний.
@@ -65,6 +78,7 @@ async def suggest_actions(
 
     Намерение клиента: {intent} (уверенность: {intent_confidence})
     Эмоциональное состояние клиента: {emotion} (уверенность: {emotion_confidence})
+    Информация из базы знаний: {knowledge_content}
     {customer_context}
     Предложите действия для оператора:
     """
