@@ -385,19 +385,16 @@ class VectorDBService:
         """
         Upsert a customer profile into the customers collection for personalized agent responses.
         Returns True if successful, False otherwise.
+        Stores customer data without an embedding since retrieval is based on exact phone_number match.
         """
         try:
             app_logger.debug(f"Upserting customer profile for {customer.phone_number}")
-            embedding_text = f"Customer: {customer.phone_number}"
-            embedding = await self.get_embedding(embedding_text)
-            if embedding is None:
-                app_logger.error(f"Failed to generate embedding for customer {customer.phone_number}")
-                return False
-
             point_id = self.generate_point_id(customer.phone_number)
+            # Use a dummy zero vector since Qdrant requires vectors for collections
+            dummy_vector = [0.0] * self.vector_size if self.vector_size else [0.0] * 1024
             point = PointStruct(
                 id=point_id,
-                vector=embedding,
+                vector=dummy_vector,  # Dummy vector as semantic search is not used for customers
                 payload=customer.dict()
             )
             await asyncio.to_thread(
@@ -405,7 +402,7 @@ class VectorDBService:
                 collection_name=self.customers_collection_name,
                 points=[point]
             )
-            app_logger.info(f"Successfully upserted customer profile for {customer.phone_number}")
+            app_logger.info(f"Successfully upserted customer profile for {customer.phone_number} without embedding")
             return True
         except Exception as e:
             app_logger.error(f"Error upserting customer profile for {customer.phone_number}: {e}")
