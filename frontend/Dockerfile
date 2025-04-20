@@ -9,3 +9,4 @@ RUN npm run build
 FROM caddy:alpine
 
 COPY --from=builder /app/dist /usr/share/caddy
+CMD ["caddy"]
