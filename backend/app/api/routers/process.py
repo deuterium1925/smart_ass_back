@@ -10,7 +10,7 @@ router = APIRouter()
     "/process",
     response_model=ProcessingResultOutput,
     summary="Process User Message",
-    description="Receives a user message, orchestrates agent processing, and returns results/suggestions. Uses phone_number as the customer identifier.",
+    description="Receives a user message, orchestrates agent processing, and returns results/suggestions. Requires an existing customer profile identified by phone_number.",
     status_code=status.HTTP_200_OK,
 )
 async def handle_process_message(
@@ -19,6 +19,7 @@ async def handle_process_message(
     """
     Endpoint to process a user message for a customer identified by phone_number.
     Orchestrates multiple agents for intent, emotion, and action suggestions.
+    Rejects processing if no customer profile exists.
     """
     try:
         # Ensure user_text is not empty or only whitespace
@@ -31,6 +32,13 @@ async def handle_process_message(
         
         log_message_processing(payload.phone_number, "STARTED", "Initiating message processing.")
         result = await process_user_message(payload)
+        # Check if the orchestrator returned an error due to missing customer profile
+        if "Профиль клиента с номером телефона" in result.consolidated_output:
+            log_message_processing(payload.phone_number, "FAILED", "Customer profile not found.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=result.consolidated_output
+            )
         log_message_processing(payload.phone_number, "COMPLETED", "Message processing completed successfully.")
         return result
     except HTTPException as he:
@@ -48,7 +56,7 @@ async def handle_process_message(
     "/submit_operator_response",
     response_model=dict,
     summary="Submit Operator Response",
-    description="Submits the operator's response for a user message and updates conversation history.",
+    description="Submits the operator's response for a user message and updates conversation history. Requires an existing customer profile.",
     status_code=status.HTTP_200_OK,
 )
 async def submit_operator_response(
@@ -57,9 +65,18 @@ async def submit_operator_response(
     """
     Endpoint to update a conversation turn with the operator's response in history.
     Identifies the turn using phone_number and timestamp.
+    Rejects operation if no customer profile exists.
     """
     try:
         log_message_processing(payload.phone_number, "STARTED", "Submitting operator response.")
+        # Check if customer profile exists before updating history
+        customer = await vector_db_service.retrieve_customer(payload.phone_number)
+        if not customer:
+            log_message_processing(payload.phone_number, "FAILED", "Customer profile not found.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Ошибка: Профиль клиента с номером телефона {payload.phone_number} не найден. Пожалуйста, создайте профиль перед обновлением истории."
+            )
         success = await vector_db_service.update_conversation_turn(
             phone_number=payload.phone_number,
             timestamp=payload.timestamp,

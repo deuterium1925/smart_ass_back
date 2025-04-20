@@ -17,6 +17,7 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
     Retrieves customer data and conversation history for personalization and context.
     Stores user messages in long-term memory and handles agent failures gracefully for partial results.
     Enforces a global timeout to prevent hanging in real-time contact center operations.
+    Rejects processing if no customer profile exists to ensure data integrity.
     """
     user_text = payload.user_text
     phone_number = payload.phone_number
@@ -28,15 +29,18 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
 
     try:
         async with asyncio.timeout(timeout_seconds):
-            # Fetch customer profile for personalized agent responses
+            # Fetch customer profile for personalized agent responses and enforce existence
             customer_data = None
-            customer_fetch_error = None
             if phone_number:
                 app_logger.debug(f"Fetching customer data for {phone_number}")
                 customer_data = await vector_db_service.retrieve_customer(phone_number)
                 if not customer_data:
-                    app_logger.warning(f"No customer data found for {phone_number}")
-                    customer_fetch_error = f"Customer profile not found for phone number {phone_number}. Please create a profile for personalized suggestions."
+                    app_logger.error(f"No customer data found for {phone_number}. Rejecting message processing.")
+                    return ProcessingResultOutput(
+                        phone_number=phone_number,
+                        consolidated_output=f"Ошибка: Профиль клиента с номером телефона {phone_number} не найден. Пожалуйста, создайте профиль перед обработкой сообщений.",
+                        customer_data=None
+                    )
             else:
                 app_logger.error("No phone number provided, processing cannot continue")
                 return ProcessingResultOutput(
@@ -102,8 +106,6 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
 
             # Compile final response with results from all agents
             consolidated_output = f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'"
-            if customer_fetch_error:
-                consolidated_output += f" | {customer_fetch_error}"
 
             # Run dependent agents (Action, Summary, QA) after independent agents
             suggestions_task = asyncio.create_task(action_agent.suggest_actions(

@@ -19,10 +19,11 @@ app = FastAPI(
     This API enables interaction with customer data and dialogue history using phone numbers as unique identifiers.
     Key features include:
     - **Customer Management**: Create and retrieve customer profiles with detailed attributes for personalized support.
-    - **Dialogue Processing**: Process customer messages, retrieve conversation history, and generate tailored suggestions for operators.
+    - **Dialogue Processing**: Process customer messages, retrieve conversation history, and generate tailored suggestions for operators. Requires an existing customer profile.
     - **Personalization**: Integrate customer data (e.g., tariff plans, subscriptions) into agent suggestions for context-aware responses.
     
-    All endpoints require a valid phone number as the customer identifier to ensure data consistency and integrity.
+    All endpoints require a valid phone number as the customer identifier to ensure data consistency and integrity. 
+    A customer profile must be created using the `/api/v1/customers/create` endpoint before processing messages or updating history.
     """,
 )
 
