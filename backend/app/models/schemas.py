@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any
 
 class Customer(BaseModel):
@@ -29,6 +29,12 @@ class Customer(BaseModel):
     has_mts_money_credit_card: bool = Field(default=False, description="Whether the customer has an MTS Money credit card.")
     has_mts_money_virtual_card: bool = Field(default=False, description="Whether the customer has an MTS Money virtual card.")
 
+    @validator('phone_number')
+    def phone_number_must_not_be_empty(cls, v):
+        if not v.strip():
+            raise ValueError("Phone number cannot be empty or whitespace-only.")
+        return v
+
 class CustomerCreateRequest(Customer):
     pass
 
@@ -52,9 +58,6 @@ class HistoryEntry(BaseModel):
 class UserMessageInput(BaseModel):
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     user_text: str = Field(..., description="The latest message from the user in Russian.")
-    history: Optional[List[Dict[str, str]]] = Field(
-        default=None, description="Previous conversation turns for context."
-    )
     operator_response: Optional[str] = Field(
         default="", description="Latest response from the operator, if available."
     )

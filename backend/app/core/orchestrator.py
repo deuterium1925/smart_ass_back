@@ -39,17 +39,16 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
                 customer_data=None
             )
 
-        # Retrieve conversation history from long-term memory
+        # Retrieve conversation history from long-term memory (server-side only)
         history = await vector_db_service.retrieve_conversation_history(phone_number, limit=10)
         app_logger.debug(f"Retrieved history for customer {phone_number}: {len(history)} turns")
         log_history_retrieval(phone_number, len(history))
         
-        # Update payload history with retrieved history if not provided
-        if not payload.history:
-            payload.history = [
-                {"role": turn["role"], "content": turn["user_text"] if turn["role"] == "user" else turn["operator_response"]}
-                for turn in history
-            ]
+        # Format history for agent processing (server-side history only)
+        formatted_history = [
+            {"role": turn["role"], "content": turn["user_text"] if turn["role"] == "user" else turn["operator_response"]}
+            for turn in history
+        ]
 
         # Run independent agents sequentially to avoid rate limits
         intent_result = await intent_agent.detect_intent(user_text)
