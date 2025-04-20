@@ -1,5 +1,6 @@
 volumes:
   qdrant_data:
+  caddy_data:
 
 networks:
   project:
@@ -31,5 +32,19 @@ services:
       - "127.0.0.1:8000:8000"
     depends_on:
       - qdrant
+    networks:
+      - project
+
+  frontend:
+    build: frontend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      - backend
+    volumes:
+      - caddy_data:/data
     networks:
       - project
