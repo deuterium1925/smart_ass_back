@@ -43,9 +43,8 @@ class CustomerCreateRequest(Customer):
 class OperatorResponseInput(BaseModel):
     """Input model for submitting an operator's response to update conversation history."""
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
-    user_text: str = Field(..., description="The user message to pair with the operator response.")
+    turn_id: str = Field(..., description="Unique identifier for the conversation turn to update.")
     operator_response: str = Field(..., description="The response from the operator for the current turn.")
-    timestamp: str = Field(..., description="Timestamp of the conversation turn to update, in ISO 8601 format (UTC).")
 
 class CustomerCreateResponse(BaseModel):
     """Response model for customer profile creation or update operations."""
@@ -66,6 +65,7 @@ class HistoryEntry(BaseModel):
     operator_response: str = Field(default="", description="Response from the operator.")
     timestamp: str = Field(default="", description="Timestamp of the conversation turn in ISO 8601 format (UTC).")
     role: str = Field(default="unknown", description="Role of the speaker (user/assistant/unknown).")
+    turn_id: str = Field(default="", description="Unique identifier for the conversation turn.")
 
 class UserMessageInput(BaseModel):
     """Input model for processing a user's message in the contact center system."""
@@ -114,4 +114,7 @@ class ProcessingResultOutput(BaseModel):
     )
     customer_data: Optional[Customer] = Field(
         default=None, description="Customer profile data for personalized processing."
+    )
+    current_turn_id: Optional[str] = Field(
+        default=None, description="Unique identifier for the current conversation turn."
     )

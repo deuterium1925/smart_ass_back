@@ -97,12 +97,13 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
 
             # Store current user message in long-term memory without operator response initially
             timestamp = datetime.now(timezone.utc).isoformat()  # Use UTC ISO timestamp instead of time.time()
-            success = await vector_db_service.store_conversation_turn(phone_number, user_text, "", timestamp)
+            turn_id = await vector_db_service.store_conversation_turn(phone_number, user_text, "", timestamp)
+            success = turn_id is not None
             if not success:
                 log_history_storage(phone_number, False, "Failed to store user message.")
                 app_logger.warning(f"Failed to store user message for customer {phone_number}; continuing processing")
             else:
-                log_history_storage(phone_number, True, "User message stored successfully.")
+                log_history_storage(phone_number, True, f"User message stored successfully with turn_id {turn_id}.")
 
             # Compile final response with results from all agents
             consolidated_output = f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'"
@@ -151,7 +152,8 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
                 consolidated_output=consolidated_output,
                 conversation_history=history,  # Include retrieved history for reference
                 history_storage_status=success,  # Indicate success/failure of history storage
-                customer_data=customer_data  # Provide customer data for frontend use
+                customer_data=customer_data,  # Provide customer data for frontend use
+                current_turn_id=turn_id if success else None  # Return turn_id for frontend use
             )
             app_logger.info(f"Orchestrator: Completed processing for customer {phone_number}")
             return output

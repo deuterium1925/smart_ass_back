@@ -224,39 +224,40 @@ class VectorDBService:
             app_logger.error(f"Error querying Vector DB for query '{query_text[:30]}...': {e}")
             return []
 
-    async def store_conversation_turn(self, phone_number: str, user_text: str, operator_response: str = "", timestamp: str = "") -> bool:
+    async def store_conversation_turn(self, phone_number: str, user_text: str, operator_response: str = "", timestamp: str = "") -> Optional[str]:
         """
         Store a conversation turn in the history collection for long-term memory.
-        Validates customer existence to prevent orphaned entries. Returns True if successful.
+        Validates customer existence to prevent orphaned entries. Returns the turn_id if successful, None otherwise.
         """
         if not phone_number:
             app_logger.error("No phone number provided for storing conversation turn")
-            return False
+            return None
 
         try:
             # Ensure customer exists before storing history
             customer = await self.retrieve_customer(phone_number)
             if not customer:
                 app_logger.error(f"Cannot store turn: No customer found with phone number {phone_number}")
-                return False
+                return None
 
             app_logger.debug(f"Storing conversation turn for customer {phone_number}")
             content = f"User: {user_text}\nOperator: {operator_response}" if operator_response else f"User: {user_text}"
             embedding = await self.get_embedding(content)
             if embedding is None:
                 app_logger.error(f"Failed to generate embedding for turn for customer {phone_number}")
-                return False
+                return None
 
-            point_id = hashlib.md5(f"{phone_number}_{timestamp}_{user_text}".encode('utf-8')).hexdigest()
+            turn_id = hashlib.md5(f"{phone_number}_{timestamp}_{user_text}".encode('utf-8')).hexdigest()
             point = PointStruct(
-                id=point_id,
+                id=turn_id,
                 vector=embedding,
                 payload={
                     "phone_number": phone_number,
                     "user_text": user_text,
                     "operator_response": operator_response,
                     "timestamp": timestamp,
-                    "content": content
+                    "content": content,
+                    "turn_id": turn_id
                 }
             )
             await asyncio.to_thread(
@@ -264,19 +265,19 @@ class VectorDBService:
                 collection_name=self.history_collection_name,
                 points=[point]
             )
-            app_logger.info(f"Stored conversation turn for customer {phone_number}")
-            return True
+            app_logger.info(f"Stored conversation turn for customer {phone_number} with turn_id {turn_id}")
+            return turn_id
         except Exception as e:
             app_logger.error(f"Error storing conversation turn for customer {phone_number}: {e}")
-            return False
+            return None
 
-    async def update_conversation_turn(self, phone_number: str, timestamp: str, user_text: str, operator_response: str) -> bool:
+    async def update_conversation_turn(self, phone_number: str, turn_id: str, operator_response: str) -> bool:
         """
-        Update a conversation turn with the operator's response using phone_number and timestamp.
+        Update a conversation turn with the operator's response using phone_number and turn_id.
         Returns True if successful, False otherwise.
         """
-        if not phone_number or not timestamp:
-            app_logger.error("No phone number or timestamp provided for updating conversation turn")
+        if not phone_number or not turn_id:
+            app_logger.error("No phone number or turn_id provided for updating conversation turn")
             return False
 
         try:
@@ -286,8 +287,7 @@ class VectorDBService:
                 scroll_filter={
                     "must": [
                         {"key": "phone_number", "match": {"value": phone_number}},
-                        {"key": "timestamp", "match": {"value": timestamp}},
-                        {"key": "user_text", "match": {"value": user_text}}
+                        {"key": "turn_id", "match": {"value": turn_id}}
                     ]
                 },
                 limit=1,
@@ -295,10 +295,12 @@ class VectorDBService:
                 with_vectors=True
             )
             if not search_result[0]:
-                app_logger.error(f"No conversation turn found for customer {phone_number} with timestamp {timestamp}")
+                app_logger.error(f"No conversation turn found for customer {phone_number} with turn_id {turn_id}")
                 return False
 
             point = search_result[0][0]
+            user_text = point.payload.get("user_text", "")
+            timestamp = point.payload.get("timestamp", "")
             content = f"User: {user_text}\nOperator: {operator_response}"
             embedding = await self.get_embedding(content)
             if embedding is None:
@@ -313,7 +315,8 @@ class VectorDBService:
                     "user_text": user_text,
                     "operator_response": operator_response,
                     "timestamp": timestamp,
-                    "content": content
+                    "content": content,
+                    "turn_id": turn_id
                 }
             )
             await asyncio.to_thread(
@@ -321,7 +324,7 @@ class VectorDBService:
                 collection_name=self.history_collection_name,
                 points=[updated_point]
             )
-            app_logger.info(f"Updated conversation turn with operator response for customer {phone_number}")
+            app_logger.info(f"Updated conversation turn with operator response for customer {phone_number} with turn_id {turn_id}")
             return True
         except Exception as e:
             app_logger.error(f"Error updating conversation turn for customer {phone_number}: {e}")
@@ -358,6 +361,7 @@ class VectorDBService:
                     "user_text": point.payload.get("user_text", ""),
                     "operator_response": point.payload.get("operator_response", ""),
                     "timestamp": point.payload.get("timestamp", ""),
+                    "turn_id": point.payload.get("turn_id", ""),
                     # Role logic: assistant if operator response exists, else user if user text exists
                     "role": (
                         "assistant" if point.payload.get("operator_response", "").strip()

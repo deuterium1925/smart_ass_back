@@ -56,7 +56,7 @@ async def handle_process_message(
     "/submit_operator_response",
     response_model=dict,
     summary="Submit Operator Response",
-    description="Submits the operator's response for a user message and updates conversation history. Requires an existing customer profile.",
+    description="Submits the operator's response for a user message and updates conversation history using turn_id. Requires an existing customer profile.",
     status_code=status.HTTP_200_OK,
 )
 async def submit_operator_response(
@@ -64,7 +64,7 @@ async def submit_operator_response(
 ):
     """
     Endpoint to update a conversation turn with the operator's response in history.
-    Identifies the turn using phone_number and timestamp.
+    Identifies the turn using phone_number and turn_id.
     Rejects operation if no customer profile exists.
     """
     try:
@@ -79,15 +79,14 @@ async def submit_operator_response(
             )
         success = await vector_db_service.update_conversation_turn(
             phone_number=payload.phone_number,
-            timestamp=payload.timestamp,
-            user_text=payload.user_text,
+            turn_id=payload.turn_id,
             operator_response=payload.operator_response
         )
         if not success:
             log_history_storage(payload.phone_number, False, "Failed to update conversation turn with operator response.")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to update conversation turn for customer {payload.phone_number}."
+                detail=f"Failed to update conversation turn for customer {payload.phone_number} with turn_id {payload.turn_id}."
             )
         log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
         log_message_processing(payload.phone_number, "COMPLETED", "Operator response submitted successfully.")
