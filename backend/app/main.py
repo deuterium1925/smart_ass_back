@@ -15,15 +15,26 @@ settings = get_settings()
 app = FastAPI(
     title="Smart Assistant Backend API",
     description="""
-    **Smart Assistant Backend API** is a multi-agent LLM system designed to support contact center operators by processing customer queries in real-time.
-    This API enables interaction with customer data and dialogue history using phone numbers as unique identifiers.
+    **Smart Assistant Backend API** is a multi-agent LLM system designed to support contact center operators by processing customer queries in real-time. 
+    This API facilitates interaction with customer data and dialogue history using phone numbers as unique identifiers. 
     Key features include:
-    - **Customer Management**: Create and retrieve customer profiles with detailed attributes for personalized support.
-    - **Dialogue Processing**: Process customer messages, retrieve conversation history, and generate tailored suggestions for operators. Requires an existing customer profile.
+    - **Customer Management**: Create and retrieve customer profiles with detailed attributes for personalized support via `/api/v1/customers/create` and `/api/v1/customers/retrieve/{phone_number}`.
+    - **Message Storage with Automated Analysis**: Store incoming user messages and automatically run Quality Assurance (QA) and Summary Agents to provide immediate feedback and conversation overviews via `/api/v1/process`.
+    - **On-Demand Conversation Analysis**: Allow operators to trigger analysis by Intent, Emotion, Knowledge, and Action Suggestion Agents for specific conversation turns or recent history via `/api/v1/analyze`. 
+      This endpoint supports batch processing of multiple messages for coherent analysis.
     - **Personalization**: Integrate customer data (e.g., tariff plans, subscriptions) into agent suggestions for context-aware responses.
-    
-    All endpoints require a valid phone number as the customer identifier to ensure data consistency and integrity. 
-    A customer profile must be created using the `/api/v1/customers/create` endpoint before processing messages or updating history.
+
+    **Workflow Overview**:
+    1. A customer profile must be created using `/api/v1/customers/create` before any message processing or history updates can occur.
+    2. Incoming user messages are stored via `/api/v1/process`, which also runs automated QA and Summary Agents in the background, returning their results for immediate reference.
+    3. Operators can request detailed analysis on-demand via `/api/v1/analyze`, targeting specific conversation turns or recent history. Dependent agents (e.g., Action Suggestion) automatically run prerequisite agents (e.g., Intent, Emotion) to ensure complete analysis.
+    4. Operator responses can be submitted to update conversation history via `/api/v1/submit_operator_response`.
+
+    **Frontend Integration Notes**:
+    - All endpoints require a valid `phone_number` as the customer identifier to ensure data consistency and integrity.
+    - The `/process` endpoint returns a `turn_id` for each stored message, which can be used in `/analyze` or `/submit_operator_response` calls.
+    - Automated results (QA, Summary) are provided immediately after message storage, while on-demand analysis (Intent, Emotion, Knowledge, Action) results are available via operator-triggered requests.
+    - Error messages are descriptive and status codes are used consistently (e.g., 400 for bad input, 500 for server errors) to aid in user-friendly error handling.
     """,
 )
 

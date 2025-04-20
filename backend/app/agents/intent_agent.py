@@ -7,7 +7,8 @@ from app.utils.logger import app_logger
 
 async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None) -> AgentResponse:
     """
-    Detect the intent of a user's message using the MWS GPT API, leveraging conversation history for context.
+    Detect the intent of a user's message or batch of messages using the MWS GPT API, leveraging conversation history for context.
+    Accepts concatenated text from multiple messages for batch processing.
     Returns an AgentResponse with the detected intent and confidence score for operator guidance.
     Includes fallback logic to handle LLM response parsing failures.
     """
@@ -22,7 +23,7 @@ async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None)
     if history and len(history) > 0:
         app_logger.debug(f"Intent Agent: Incorporating history with {len(history)} turns for text: {text[:50]}")
         history_texts = []
-        for turn in history[-3:]:  # Limit to last 3 turns to manage token usage
+        for turn in history[-5:]:  # Limit to last 5 turns to manage token usage
             user_text = turn.user_text if turn.user_text else "Не указано"
             op_response = turn.operator_response if turn.operator_response else "Ответ оператора отсутствует"
             history_texts.append(f"Клиент: {user_text} | Оператор: {op_response}")
@@ -34,11 +35,12 @@ async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None)
     else:
         history_context = "История диалога отсутствует. Определяйте намерение только на основе текущего сообщения."
 
-    # Construct a structured prompt for precise intent detection in Russian
+    # Construct a structured prompt for precise intent detection in Russian, supporting batch analysis
     prompt = f"""
     Вы - ассистент контакт-центра, специализирующийся на определении намерений клиента.
-    Ваша задача - проанализировать сообщение клиента на русском языке и определить его основное намерение.
+    Ваша задача - проанализировать сообщение или набор сообщений клиента на русском языке и определить основное намерение.
     Учитывайте историю диалога, если она доступна, чтобы понять контекст общения.
+    Если предоставлен набор сообщений, определите общее намерение, объединяющее их содержание.
     Ответ должен быть строго в формате JSON, как в примере ниже. Не добавляйте лишний текст или пояснения.
     Если намерение неясно, используйте категорию "other".
     Пример ответа:
@@ -48,7 +50,7 @@ async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None)
     }}
     Возможные категории намерений: {', '.join(possible_intents)}.
     {history_context}
-    Сообщение клиента для анализа: "{text}"
+    Сообщение(я) клиента для анализа: "{text}"
     """
     try:
         app_logger.debug(f"Intent Agent: Sending prompt to LLM for text: {text[:50]}...")

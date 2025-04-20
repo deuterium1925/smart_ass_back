@@ -75,6 +75,16 @@ class UserMessageInput(BaseModel):
         default="", description="Latest response from the operator, if available."
     )
 
+class AnalysisRequest(BaseModel):
+    """Input model for requesting on-demand conversation analysis."""
+    phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
+    turn_ids: Optional[List[str]] = Field(
+        default=None, description="List of specific turn IDs to analyze. If not provided, analyzes recent history."
+    )
+    history_limit: Optional[int] = Field(
+        default=10, description="Limit on the number of recent history turns to analyze if turn_ids are not specified."
+    )
+
 class AgentResponse(BaseModel):
     """Represents the output from an agent (e.g., Intent, Emotion) with results and confidence."""
     agent_name: str = Field(..., description="Name of the agent providing the response.")
@@ -95,7 +105,7 @@ class KnowledgeResult(BaseModel):
     relevance_score: float = Field(..., description="Relevance score for the document.")
 
 class ProcessingResultOutput(BaseModel):
-    """Output model consolidating results from all agents for operator assistance."""
+    """Output model consolidating results from all agents for operator assistance via /analyze endpoint."""
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     intent: Optional[AgentResponse] = Field(default=None, description="Intent detection result.")
     emotion: Optional[AgentResponse] = Field(default=None, description="Emotion analysis result.")
@@ -117,4 +127,13 @@ class ProcessingResultOutput(BaseModel):
     )
     current_turn_id: Optional[str] = Field(
         default=None, description="Unique identifier for the current conversation turn."
+    )
+
+class ProcessMessageResponse(BaseModel):
+    """Response model for storing a user message and running automated agents via /process endpoint."""
+    status: str = Field(..., description="Status of the operation (e.g., 'success', 'error').")
+    message: str = Field(..., description="Descriptive message about the operation result.")
+    turn_id: str = Field(..., description="Unique identifier for the stored conversation turn.")
+    automated_results: Dict[str, AgentResponse] = Field(
+        ..., description="Results from automated agents (Summary and QA) run after message storage."
     )

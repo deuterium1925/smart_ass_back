@@ -9,8 +9,9 @@ from app.data.knowledge_base import KNOWLEDGE_BASE
 
 async def find_knowledge(text: str) -> AgentResponse:
     """
-    Retrieve relevant information from the vector database using similarity search, then generate a natural
-    language response with an LLM. Optimizes output length for use by downstream agents like action_agent.
+    Retrieve relevant information from the vector database using similarity search based on a batch of user messages.
+    Generates a natural language response with an LLM using broader context from concatenated messages.
+    Optimizes output length for use by downstream agents like action_agent.
     Returns an AgentResponse with knowledge content and confidence score for operator support.
     Prioritizes relevant content over arbitrary truncation to avoid losing critical information.
     Falls back to static knowledge base if vector search fails.
@@ -64,15 +65,16 @@ async def find_knowledge(text: str) -> AgentResponse:
         else:
             app_logger.debug(f"Knowledge Agent: Context length within limit ({len(context)} characters) for query: {text[:50]}")
         
-        # Generate a concise response using LLM based on retrieved context
+        # Generate a concise response using LLM based on retrieved context, considering batch input
         prompt = f"""
         Вы - ассистент контакт-центра, помогающий оператору ответить на запрос клиента.
         Ваша задача - сформулировать точный, полезный и естественный ответ на основе предоставленной информации из базы знаний.
+        Учитывайте, что запрос может представлять собой набор сообщений клиента, поэтому ответ должен учитывать общий контекст.
         Используйте только релевантные данные из контекста. Если информация недостаточна, укажите это.
         Ответ должен быть на русском языке, кратким (не более 200 слов) и ориентированным на помощь клиенту.
         Если контекст был сокращен, добавьте предупреждение, что информация может быть неполной.
         
-        Запрос клиента: {text}
+        Запрос клиента (или набор сообщений): {text}
         Контекст из базы знаний:
         {context}
         

@@ -9,7 +9,15 @@ router = APIRouter()
     "/create",
     response_model=CustomerCreateResponse,
     summary="Create or Update Customer Profile",
-    description="Creates or updates a customer profile using the phone number as a unique identifier. Supports detailed personalization with customer attributes.",
+    description="""
+    Creates or updates a customer profile using the phone number as a unique identifier. 
+    Supports detailed personalization with customer attributes for agent analysis.
+    
+    **Frontend Integration Notes**:
+    - A customer profile must be created before using `/process`, `/analyze`, or `/submit_operator_response` endpoints.
+    - Use `phone_number` as the primary key for all interactions with this API.
+    - Check `status` and `message` for operation success or error details to display to users if necessary.
+    """,
     status_code=status.HTTP_200_OK,
 )
 async def create_customer(
@@ -65,7 +73,14 @@ async def create_customer(
     "/retrieve/{phone_number}",
     response_model=CustomerRetrieveResponse,
     summary="Retrieve Customer Profile",
-    description="Retrieves a customer profile using the provided phone number as the unique identifier.",
+    description="""
+    Retrieves a customer profile using the provided phone number as the unique identifier. 
+    Returns null if no profile exists.
+    
+    **Frontend Integration Notes**:
+    - Use this endpoint to fetch customer data for display or before processing messages to ensure a profile exists.
+    - Check `status` to determine if a customer was found (`success` or `not_found`) and handle accordingly in the UI.
+    """,
     status_code=status.HTTP_200_OK,
 )
 async def retrieve_customer(phone_number: str):

@@ -7,7 +7,8 @@ from app.utils.logger import app_logger
 
 async def detect_emotion(text: str, history: Optional[List[HistoryEntry]] = None) -> AgentResponse:
     """
-    Detect the emotional tone of a user's message using the MWS GPT API, using history for context.
+    Detect the emotional tone of a user's message or batch of messages using the MWS GPT API, using history for context.
+    Accepts concatenated text from multiple messages for batch processing to determine overall emotional tone.
     Returns an AgentResponse with the detected emotion and confidence score to aid operator response.
     Handles LLM response parsing failures with fallback logic.
     """
@@ -22,7 +23,7 @@ async def detect_emotion(text: str, history: Optional[List[HistoryEntry]] = None
     if history and len(history) > 0:
         app_logger.debug(f"Emotion Agent: Incorporating history with {len(history)} turns for text: {text[:50]}")
         history_texts = []
-        for turn in history[-3:]:  # Limit to last 3 turns to manage token usage
+        for turn in history[-5:]:  # Limit to last 5 turns to manage token usage
             user_text = turn.user_text if turn.user_text else "Не указано"
             op_response = turn.operator_response if turn.operator_response else "Ответ оператора отсутствует"
             history_texts.append(f"Клиент: {user_text} | Оператор: {op_response}")
@@ -34,11 +35,12 @@ async def detect_emotion(text: str, history: Optional[List[HistoryEntry]] = None
     else:
         history_context = "История диалога отсутствует. Определяйте эмоцию только на основе текущего сообщения."
 
-    # Construct a structured prompt for precise emotion detection in Russian
+    # Construct a structured prompt for precise emotion detection in Russian, supporting batch analysis
     prompt = f"""
     Вы - ассистент контакт-центра, специализирующийся на анализе эмоциональной окраски сообщений клиентов.
-    Ваша задача - проанализировать сообщение клиента на русском языке и определить его эмоциональный тон.
+    Ваша задача - проанализировать сообщение или набор сообщений клиента на русском языке и определить их общий эмоциональный тон.
     Учитывайте историю диалога, если она доступна, чтобы понять контекст общения (например, нарастающее раздражение).
+    Если предоставлен набор сообщений, определите преобладающую эмоцию, объединяющую их содержание.
     Ответ должен быть строго в формате JSON, как в примере ниже. Не добавляйте лишний текст или пояснения.
     Если эмоция неясна, используйте категорию "neutral".
     Пример ответа:
@@ -48,7 +50,7 @@ async def detect_emotion(text: str, history: Optional[List[HistoryEntry]] = None
     }}
     Возможные категории эмоций: {', '.join(possible_emotions)}.
     {history_context}
-    Сообщение клиента для анализа: "{text}"
+    Сообщение(я) клиента для анализа: "{text}"
     """
     try:
         app_logger.debug(f"Emotion Agent: Sending prompt to LLM for text: {text[:50]}...")
