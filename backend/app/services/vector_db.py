@@ -371,14 +371,14 @@ class VectorDBService:
                 }
                 for point in search_result[0]
             ]
-            # Log warnings for ambiguous role assignments
+            # Log debug messages for ambiguous role assignments to monitor data consistency
             for entry in history:
                 user_text_present = bool(entry["user_text"].strip())
                 operator_resp_present = bool(entry["operator_response"].strip())
                 if entry["role"] == "unknown":
-                    app_logger.warning(f"Unknown role for history entry for customer {phone_number}: Neither user_text nor operator_response present")
-                elif user_text_present and operator_resp_present:
-                    app_logger.warning(f"Ambiguous role for history entry for customer {phone_number}: Both present, assigned role={entry['role']}")
+                    app_logger.debug(f"Unknown role for history entry for customer {phone_number}: Neither user_text nor operator_response present")
+                elif user_text_present and operator_resp_present and entry["role"] == "assistant":
+                    app_logger.debug(f"Both fields present for history entry for customer {phone_number}: Assigned role={entry['role']} prioritizing operator_response")
 
             history.sort(key=lambda x: x.get("timestamp", "0"), reverse=False)
             app_logger.info(f"Retrieved {len(history)} conversation turns for customer {phone_number}")
@@ -390,11 +390,14 @@ class VectorDBService:
     async def upsert_customer(self, customer: Customer) -> bool:
         """
         Upsert a customer profile into the customers collection for personalized agent responses.
+        Uses a dummy vector since retrieval is based on exact match via payload index.
         Returns True if successful, False otherwise.
         Stores customer data without an embedding since retrieval is based on exact phone_number match.
         """
         try:
             app_logger.debug(f"Upserting customer profile for {customer.phone_number}")
+            # Use a dummy vector instead of generating an embedding since retrieval is payload-based
+            dummy_vector = [0.0] * self.vector_size if self.vector_size else [0.0] * 1024
             point_id = self.generate_point_id(customer.phone_number)
             # Use a dummy zero vector since Qdrant requires vectors for collections
             dummy_vector = [0.0] * self.vector_size if self.vector_size else [0.0] * 1024
@@ -408,7 +411,7 @@ class VectorDBService:
                 collection_name=self.customers_collection_name,
                 points=[point]
             )
-            app_logger.info(f"Successfully upserted customer profile for {customer.phone_number} without embedding")
+            app_logger.info(f"Successfully upserted customer profile for {customer.phone_number} with dummy vector")
             return True
         except Exception as e:
             app_logger.error(f"Error upserting customer profile for {customer.phone_number}: {e}")
