@@ -32,7 +32,7 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: str = "DEBUG"
     MAX_RETRIES: int = 3
-    REQUEST_TIMEOUT: float = 60.0  # Increased from 30.0 to 60.0 for LLM calls for debugging
+    REQUEST_TIMEOUT: float = 60.0  # Increased from 30.0 to 60.0 to handle rate limiting and retries
 
     model_config = SettingsConfigDict(env_file='.env', extra='ignore', env_file_encoding='utf-8')
 

@@ -46,7 +46,7 @@ class LLMService:
                         truncated_text = error_text[:500] + "..." if len(error_text) > 500 else error_text
                         app_logger.warning(f"MWS API transient error {response.status} (retry {retries+1}/{self.max_retries}): {truncated_text}")
                         retries += 1
-                        await asyncio.sleep(5 * (2 ** retries))  # Exponential backoff for rate limits
+                        await asyncio.sleep(8 * (2 ** retries))  # Increased base backoff from 5 to 8 seconds for rate limits
                     else:
                         error_text = await response.text()
                         truncated_text = error_text[:500] + "..." if len(error_text) > 500 else error_text
@@ -55,11 +55,11 @@ class LLMService:
             except asyncio.TimeoutError as te:
                 app_logger.error(f"MWS API call timeout for model {model_name} after {self.settings.REQUEST_TIMEOUT}s (retry {retries+1}/{self.max_retries})")
                 retries += 1
-                await asyncio.sleep(5 * (2 ** retries))  # Backoff for timeouts
+                await asyncio.sleep(8 * (2 ** retries))  # Increased backoff for timeouts
             except Exception as e:
                 app_logger.error(f"MWS API call error for model {model_name}: {str(e)} (retry {retries+1}/{self.max_retries})")
                 retries += 1
-                await asyncio.sleep(5 * (2 ** retries))  # Backoff for general errors
+                await asyncio.sleep(8 * (2 ** retries))  # Increased backoff for general errors
         app_logger.error(f"Max retries reached for MWS API call with model {model_name}")
         return None
 

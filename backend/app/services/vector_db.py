@@ -127,6 +127,7 @@ class VectorDBService:
         retries = 0
         while retries < self.settings.MAX_RETRIES:
             try:
+                app_logger.debug(f"Generating embedding for text: {text[:50]}... using model {self.embedding_model}")
                 async with aiohttp.ClientSession(timeout=self.timeout) as session:
                     response = await session.post(
                         url=self.settings.MWS_EMBEDDING_URL,
@@ -170,13 +171,14 @@ class VectorDBService:
                             retries += 1
                             await asyncio.sleep(2 ** retries)
                             continue
+                        app_logger.debug(f"Successfully generated embedding for text: {text[:50]}... (length: {len(embedding)})")
                         return embedding
                     else:
                         app_logger.warning(f"MWS Embedding API failed with status {response.status}")
                         retries += 1
                         await asyncio.sleep(2 ** retries)
             except Exception as e:
-                app_logger.error(f"MWS Embedding API error: {e}")
+                app_logger.error(f"MWS Embedding API error for text '{text[:50]}...': {e}")
                 retries += 1
                 await asyncio.sleep(2 ** retries)
         app_logger.error(f"Max retries reached for embedding generation for text: {text[:30]}...")
@@ -216,10 +218,10 @@ class VectorDBService:
                 }
                 for hit in search_result
             ]
-            app_logger.debug(f"Retrieved {len(results)} documents from Vector DB")
+            app_logger.debug(f"Retrieved {len(results)} documents from Vector DB for query: {query_text[:30]}...")
             return results
         except Exception as e:
-            app_logger.error(f"Error querying Vector DB: {e}")
+            app_logger.error(f"Error querying Vector DB for query '{query_text[:30]}...': {e}")
             return []
 
     async def store_conversation_turn(self, phone_number: str, user_text: str, operator_response: str = "", timestamp: str = "") -> bool:

@@ -5,6 +5,7 @@ from app.services.vector_db import vector_db_service
 from app.services.llm_service import llm_service
 from app.core.config import get_settings
 from app.utils.logger import app_logger
+from app.data.knowledge_base import KNOWLEDGE_BASE
 
 async def find_knowledge(text: str) -> AgentResponse:
     """
@@ -12,6 +13,7 @@ async def find_knowledge(text: str) -> AgentResponse:
     language response with an LLM. Optimizes output length for use by downstream agents like action_agent.
     Returns an AgentResponse with knowledge content and confidence score for operator support.
     Prioritizes relevant content over arbitrary truncation to avoid losing critical information.
+    Falls back to static knowledge base if vector search fails.
     """
     settings = get_settings()
     try:
@@ -21,12 +23,8 @@ async def find_knowledge(text: str) -> AgentResponse:
         
         if not results:
             app_logger.warning(f"No relevant knowledge found for query: {text}")
-            return AgentResponse(
-                agent_name="KnowledgeAgent",
-                result={"knowledge": [], "message": "No relevant information found."},
-                confidence=0.0,
-                error="No matching knowledge base entries."
-            )
+            # Fallback to static knowledge base search
+            return fallback_to_static_knowledge(text)
 
         # Log retrieved documents for debugging
         app_logger.debug(f"Knowledge Agent: Retrieved {len(results)} documents for query: {text[:50]}")
@@ -43,20 +41,16 @@ async def find_knowledge(text: str) -> AgentResponse:
             query = result.get("query", "unknown")
             source = result.get("sources", "")
             
-            if relevance_score >= 0.5:  # Threshold for debugging
+            if relevance_score >= 0.7:
                 knowledge_chunks.append(f"Документ: {query}\nСодержание: {content}")
                 if source and source not in sources:
                     sources.append(source)
                 avg_relevance_score += relevance_score
         
         if not knowledge_chunks:
-            app_logger.warning(f"No documents met relevance threshold (0.5) for query: {text}")
-            return AgentResponse(
-                agent_name="KnowledgeAgent",
-                result={"knowledge": [], "message": "No relevant information found with sufficient confidence."},
-                confidence=0.0,
-                error="Relevance score below threshold."
-            )
+            app_logger.warning(f"No documents met relevance threshold (0.7) for query: {text}")
+            # Fallback to static knowledge base search
+            return fallback_to_static_knowledge(text)
 
         avg_relevance_score /= len(knowledge_chunks)
         context = "\n\n".join(knowledge_chunks)
@@ -144,9 +138,39 @@ async def find_knowledge(text: str) -> AgentResponse:
 
     except Exception as e:
         app_logger.error(f"Knowledge Agent failed for query {text}: {str(e)}")
-        return AgentResponse(
-            agent_name="KnowledgeAgent",
-            result={"knowledge": [], "message": "Error processing knowledge query."},
-            confidence=0.0,
-            error=str(e)
-        )
+        # Fallback to static knowledge base on exception
+        return fallback_to_static_knowledge(text)
+
+def fallback_to_static_knowledge(text: str) -> AgentResponse:
+    """
+    Fallback mechanism to search static KNOWLEDGE_BASE if vector search fails or returns no relevant results.
+    Searches for partial matches in query field and returns the first matching entry.
+    """
+    app_logger.info(f"Knowledge Agent: Falling back to static knowledge base for query: {text[:50]}")
+    text_lower = text.lower()
+    for entry in KNOWLEDGE_BASE:
+        query = entry.get("query", "").lower()
+        if text_lower in query or any(word in query for word in text_lower.split()):
+            app_logger.info(f"Knowledge Agent: Found matching static entry for query: {text[:50]} - {entry['query']}")
+            knowledge_result = KnowledgeResult(
+                document_id="static_fallback",
+                content=entry.get("correct_answer", "No content available."),
+                relevance_score=0.75  # Arbitrary confidence for fallback
+            )
+            return AgentResponse(
+                agent_name="KnowledgeAgent",
+                result={
+                    "knowledge": [knowledge_result.dict()],
+                    "sources": entry.get("correct_sources", "No sources available.")
+                },
+                confidence=0.75,
+                error="Vector search failed, using static knowledge base fallback."
+            )
+    
+    app_logger.warning(f"Knowledge Agent: No matching entry found in static knowledge base for query: {text[:50]}")
+    return AgentResponse(
+        agent_name="KnowledgeAgent",
+        result={"knowledge": [], "message": "No relevant information found even in static fallback."},
+        confidence=0.0,
+        error="No matching knowledge base entries in vector or static search."
+    )

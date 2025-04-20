@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 from typing import List, Dict
 from app.utils.logger import app_logger
@@ -542,20 +543,31 @@ STATIC_KNOWLEDGE_BASE: List[Dict] = [
         "correct_sources": "https://support.mts.ru/mts_mobilnaya_svyaz/esim/kak-perenesti-esim-v-novii-telefon"
     }]
 
+def strip_html_tags(text: str) -> str:
+    """
+    Remove HTML tags from text to ensure clean content for embeddings and responses.
+    """
+    clean = re.compile('<.*?>')
+    return re.sub(clean, '', text).replace('&nbsp;', ' ')
+
 def load_additional_knowledge_base(data_dir: str = "app/data") -> List[Dict]:
     """
     Load additional knowledge base entries from JSON files in the specified directory for the Knowledge Agent.
     Normalizes data to match the STATIC_KNOWLEDGE_BASE format for consistent query handling.
+    Strips HTML tags from content to prevent markup interference in embeddings.
+    Deduplicates entries based on query and content to avoid redundancy, but preserves critical entries.
     Returns a combined list of all entries to support operator assistance with diverse customer queries.
     """
     knowledge_base = STATIC_KNOWLEDGE_BASE.copy()
     data_path = Path(data_dir)
+    seen_entries = set()  # For deduplication based on query + content
     
     if not data_path.exists():
         app_logger.warning(f"Data directory {data_dir} does not exist. Using only static knowledge base.")
         return knowledge_base
 
     json_files = data_path.glob("*.json")
+    loaded_entries_count = 0
     for json_file in json_files:
         try:
             app_logger.info(f"Loading knowledge base data from {json_file}")
@@ -568,17 +580,26 @@ def load_additional_knowledge_base(data_dir: str = "app/data") -> List[Dict]:
                 
             for entry in data:
                 # Normalize JSON data to ensure consistent structure for vector database indexing
-                normalized_entry = {
-                    "query": entry.get("name", "Unknown Query"),
-                    "correct_answer": entry.get("content", "No content available."),
-                    "correct_sources": entry.get("urlArticleOnSupport", "")
-                }
-                knowledge_base.append(normalized_entry)
-            app_logger.info(f"Successfully loaded {len(data)} entries from {json_file}")
+                content = strip_html_tags(entry.get("content", "No content available."))
+                query = entry.get("name", "Unknown Query")
+                unique_key = f"{query}:{content[:100]}"  # Deduplication key (partial content for efficiency)
+                
+                if unique_key not in seen_entries:
+                    seen_entries.add(unique_key)
+                    normalized_entry = {
+                        "query": query,
+                        "correct_answer": content,
+                        "correct_sources": entry.get("urlArticleOnSupport", "")
+                    }
+                    knowledge_base.append(normalized_entry)
+                    loaded_entries_count += 1
+                    if "кион" in query.lower() or "kion" in query.lower():
+                        app_logger.info(f"Loaded critical 'кион/KION' entry from {json_file}: {query}")
+            app_logger.info(f"Successfully loaded {len(data)} entries from {json_file}, after deduplication: {loaded_entries_count} unique entries added so far")
         except Exception as e:
             app_logger.error(f"Error loading {json_file}: {str(e)}")
     
-    app_logger.info(f"Total knowledge base entries loaded: {len(knowledge_base)}")
+    app_logger.info(f"Total knowledge base entries loaded: {len(knowledge_base)} after deduplication (Static: {len(STATIC_KNOWLEDGE_BASE)}, Additional: {len(knowledge_base) - len(STATIC_KNOWLEDGE_BASE)})")
     return knowledge_base
 
 # Combined knowledge base for use in main.py during startup to populate the vector database

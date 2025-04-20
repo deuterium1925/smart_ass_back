@@ -52,14 +52,43 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             app_logger.debug(f"Retrieved history for customer {phone_number}: {len(history)} turns")
             log_history_retrieval(phone_number, len(history))
             
-            # Execute independent agents sequentially to manage API rate limits
-            intent_result = await intent_agent.detect_intent(user_text, history=history)
-            app_logger.debug(f"Completed Intent Agent for {phone_number}")
-            emotion_result = await emotion_agent.detect_emotion(user_text, history=history)
-            app_logger.debug(f"Completed Emotion Agent for {phone_number}")
-            knowledge_result = await knowledge_agent.find_knowledge(user_text)
-            app_logger.debug(f"Completed Knowledge Agent for {phone_number}")
-
+            # Execute independent agents concurrently to reduce total processing time
+            intent_task = asyncio.create_task(intent_agent.detect_intent(user_text, history=history))
+            emotion_task = asyncio.create_task(emotion_agent.detect_emotion(user_text, history=history))
+            knowledge_task = asyncio.create_task(knowledge_agent.find_knowledge(user_text))
+            
+            # Wait for all tasks to complete or timeout individually
+            intent_result, emotion_result, knowledge_result = await asyncio.gather(
+                intent_task, emotion_task, knowledge_task, return_exceptions=True
+            )
+            
+            # Handle potential exceptions or timeouts per agent
+            if isinstance(intent_result, Exception):
+                app_logger.error(f"Intent Agent failed for {phone_number}: {str(intent_result)}")
+                intent_result = AgentResponse(
+                    agent_name="IntentAgent",
+                    result={"intent": "unknown", "confidence": 0.0},
+                    confidence=0.0,
+                    error=f"Agent failed: {str(intent_result)}"
+                )
+            if isinstance(emotion_result, Exception):
+                app_logger.error(f"Emotion Agent failed for {phone_number}: {str(emotion_result)}")
+                emotion_result = AgentResponse(
+                    agent_name="EmotionAgent",
+                    result={"emotion": "neutral", "confidence": 0.0},
+                    confidence=0.0,
+                    error=f"Agent failed: {str(emotion_result)}"
+                )
+            if isinstance(knowledge_result, Exception):
+                app_logger.error(f"Knowledge Agent failed for {phone_number}: {str(knowledge_result)}")
+                knowledge_result = AgentResponse(
+                    agent_name="KnowledgeAgent",
+                    result={"knowledge": [], "message": "Error processing knowledge query."},
+                    confidence=0.0,
+                    error=f"Agent failed: {str(knowledge_result)}"
+                )
+            
+            app_logger.debug(f"Completed Independent Agents for {phone_number}")
             app_logger.debug(f"Customer {phone_number} - Intent: {intent_result.result}, Emotion: {emotion_result.result}")
 
             # Store current user message in long-term memory without operator response initially
@@ -76,17 +105,47 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             if customer_fetch_error:
                 consolidated_output += f" | {customer_fetch_error}"
 
+            # Run dependent agents (Action, Summary, QA) after independent agents
+            suggestions_task = asyncio.create_task(action_agent.suggest_actions(
+                intent_result, emotion_result, knowledge_result, 
+                customer_data=customer_data, history=history
+            ))
+            summary_task = asyncio.create_task(summary_agent.summarize_turn(user_text, intent_result, emotion_result, knowledge_result))
+            qa_task = asyncio.create_task(qa_agent.check_quality(user_text, ""))
+
+            suggestions, summary_result, qa_result = await asyncio.gather(
+                suggestions_task, summary_task, qa_task, return_exceptions=True
+            )
+
+            # Handle exceptions for dependent agents
+            if isinstance(suggestions, Exception):
+                app_logger.error(f"Action Agent failed for {phone_number}: {str(suggestions)}")
+                suggestions = []
+            if isinstance(summary_result, Exception):
+                app_logger.error(f"Summary Agent failed for {phone_number}: {str(summary_result)}")
+                summary_result = AgentResponse(
+                    agent_name="SummaryAgent",
+                    result={"summary": "Failed to generate summary."},
+                    confidence=0.0,
+                    error=f"Agent failed: {str(summary_result)}"
+                )
+            if isinstance(qa_result, Exception):
+                app_logger.error(f"QA Agent failed for {phone_number}: {str(qa_result)}")
+                qa_result = AgentResponse(
+                    agent_name="QAAgent",
+                    result={"feedback": "Failed to generate QA feedback."},
+                    confidence=0.0,
+                    error=f"Agent failed: {str(qa_result)}"
+                )
+
             output = ProcessingResultOutput(
                 phone_number=phone_number,
                 intent=intent_result,
                 emotion=emotion_result,
                 knowledge=knowledge_result,
-                suggestions=await action_agent.suggest_actions(
-                    intent_result, emotion_result, knowledge_result, 
-                    customer_data=customer_data, history=history
-                ),
-                summary=await summary_agent.summarize_turn(user_text, intent_result, emotion_result, knowledge_result),
-                qa_feedback=await qa_agent.check_quality(user_text, ""),
+                suggestions=suggestions,
+                summary=summary_result,
+                qa_feedback=qa_result,
                 consolidated_output=consolidated_output,
                 conversation_history=history,  # Include retrieved history for reference
                 history_storage_status=success,  # Indicate success/failure of history storage

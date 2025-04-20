@@ -40,24 +40,44 @@ def compute_content_hash(entry: Dict) -> str:
     content = f"{entry.get('query', '')}{entry.get('correct_answer', '')}{entry.get('correct_sources', '')}"
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
-async def generate_embeddings_batch(entries: List[Dict], batch_size: int = 50) -> List[Tuple[Dict, List[float]]]:
-    """Generate embeddings for knowledge base entries in batches to optimize performance."""
+async def generate_embeddings_batch(entries: List[Dict], batch_size: int = 50, max_concurrent_batches: int = 5) -> List[Tuple[Dict, List[float]]]:
+    """
+    Generate embeddings for knowledge base entries in parallel batches to optimize performance.
+    Uses a semaphore to limit the number of concurrent batches to avoid rate limiting.
+    """
     results = []
-    for i in range(0, len(entries), batch_size):
-        batch = entries[i:i + batch_size]
-        app_logger.info(f"Generating embeddings for batch {i // batch_size + 1} ({len(batch)} entries)...")
-        tasks = [vector_db_service.get_embedding(entry["query"]) for entry in batch]
-        embeddings = await asyncio.gather(*tasks)
-        for entry, embedding in zip(batch, embeddings):
-            if embedding:
-                results.append((entry, embedding))
-            else:
-                app_logger.warning(f"Failed to generate embedding for query: {entry.get('query', 'Unknown')[:30]}...")
-        app_logger.info(f"Completed batch {i // batch_size + 1}: {len(results)} embeddings generated so far.")
+    semaphore = asyncio.Semaphore(max_concurrent_batches)
+    
+    async def process_batch(batch: List[Dict], batch_num: int):
+        async with semaphore:
+            app_logger.info(f"Generating embeddings for batch {batch_num} ({len(batch)} entries)...")
+            tasks = [vector_db_service.get_embedding(entry["query"]) for entry in batch]
+            embeddings = await asyncio.gather(*tasks)
+            batch_results = []
+            for entry, embedding in zip(batch, embeddings):
+                if embedding:
+                    batch_results.append((entry, embedding))
+                else:
+                    app_logger.warning(f"Failed to generate embedding for query: {entry.get('query', 'Unknown')[:30]}...")
+            app_logger.info(f"Completed batch {batch_num}: {len(batch_results)} embeddings added, total so far: {len(results) + len(batch_results)}")
+            return batch_results
+    
+    # Create tasks for batches and process them concurrently
+    batches = [entries[i:i + batch_size] for i in range(0, len(entries), batch_size)]
+    tasks = [process_batch(batch, i + 1) for i, batch in enumerate(batches)]
+    batch_results = await asyncio.gather(*tasks)
+    
+    # Flatten the results from all batches
+    for batch_result in batch_results:
+        results.extend(batch_result)
+    
     return results
 
-async def upsert_batch_to_qdrant(points: List[PointStruct], batch_size: int = 100):
-    """Upsert points to Qdrant vector database in batches for efficient storage."""
+async def upsert_batch_to_qdrant(points: List[PointStruct], batch_size: int = 200):
+    """
+    Upsert points to Qdrant vector database in larger batches for efficient storage.
+    Increased batch size to reduce network overhead.
+    """
     for i in range(0, len(points), batch_size):
         batch = points[i:i + batch_size]
         await asyncio.to_thread(
@@ -99,6 +119,7 @@ async def startup_event():
     Initialize application services on startup, including vector database collections and
     incremental indexing of the knowledge base to support real-time query processing by agents.
     Implements smart indexing by only updating new or changed entries to optimize performance.
+    Forces reindexing if critical entries are missing.
     """
     app_logger.info("Starting up Smart Assistant Backend...")
     await vector_db_service.ensure_collection()
@@ -111,19 +132,38 @@ async def startup_event():
         )
         app_logger.info(f"Collection {vector_db_service.collection_name} status: {collection_info_knowledge.points_count} points")
 
-        # Verify specific knowledge base entry for debugging
+        # Check for critical knowledge base entry (e.g., 'кион') for debugging with case-insensitive search approximation
         search_result = await asyncio.to_thread(
             vector_db_service.client.scroll,
             collection_name=vector_db_service.collection_name,
-            scroll_filter={"must": [{"key": "query", "match": {"value": "Безлимит кион"}}]},
-            limit=1,
+            limit=100,  # Broader search to handle case or minor text mismatches
             with_payload=True,
             with_vectors=False
         )
-        if search_result[0]:
-            app_logger.info(f"Found 'Безлимит кион' in Qdrant: {search_result[0][0].payload}")
-        else:
-            app_logger.warning("Did not find 'Безлимит кион' in Qdrant. Data may not be indexed properly.")
+        kion_found = False
+        for point in search_result[0]:
+            query_text = point.payload.get("query", "").lower()
+            if "кион" in query_text or "kion" in query_text:
+                app_logger.info(f"Found 'кион/KION' related entry in Qdrant: {point.payload}")
+                kion_found = True
+        if not kion_found:
+            app_logger.warning("Did not find any 'кион/KION' related entries in Qdrant. Forcing reindexing of knowledge base.")
+
+            # Force reindexing by clearing the collection and re-adding all entries
+            app_logger.info(f"Clearing collection {vector_db_service.collection_name} to force reindexing.")
+            await asyncio.to_thread(
+                vector_db_service.client.delete_collection,
+                collection_name=vector_db_service.collection_name
+            )
+            await asyncio.to_thread(
+                vector_db_service.client.create_collection,
+                collection_name=vector_db_service.collection_name,
+                vectors_config={
+                    "size": vector_db_service.vector_size if vector_db_service.vector_size else 1024,
+                    "distance": "Cosine"
+                }
+            )
+            app_logger.info(f"Recreated collection {vector_db_service.collection_name} for forced reindexing.")
 
         # Log status of conversation history collection
         collection_info_history = await asyncio.to_thread(
@@ -147,6 +187,12 @@ async def startup_event():
         # Log the total number of knowledge base entries loaded for indexing
         app_logger.info(f"Loaded {len(KNOWLEDGE_BASE)} knowledge base entries for indexing.")
 
+        # Log specific entries related to 'кион' for debugging
+        kion_entries = [entry for entry in KNOWLEDGE_BASE if "кион" in entry.get("query", "").lower() or "kion" in entry.get("query", "").lower()]
+        app_logger.info(f"Found {len(kion_entries)} entries related to 'кион/KION' in KNOWLEDGE_BASE")
+        for i, entry in enumerate(kion_entries):
+            app_logger.debug(f"Kion Entry {i+1}: Query='{entry['query']}', Content Preview='{entry['correct_answer'][:100]}...'")
+
         # Implement incremental indexing to update only new or changed knowledge base entries
         app_logger.info("Starting incremental indexing of knowledge base...")
         existing_points = await get_existing_points()
@@ -161,9 +207,9 @@ async def startup_event():
             content_hash = compute_content_hash(entry)
             kb_hashes[point_id] = content_hash
             
-            # Add to index list if new or updated
-            if point_id not in existing_points:
-                app_logger.debug(f"New item detected: {query_text[:30]}... (ID: {point_id})")
+            # Add to index list if new or updated (or force reindex if 'кион' related)
+            if point_id not in existing_points or "кион" in query_text.lower() or "kion" in query_text.lower():
+                app_logger.debug(f"Indexing item (new or critical): {query_text[:30]}... (ID: {point_id})")
                 to_index.append(entry)
             elif existing_points[point_id]["content_hash"] != content_hash:
                 app_logger.debug(f"Updated item detected: {query_text[:30]}... (ID: {point_id})")
@@ -179,7 +225,7 @@ async def startup_event():
             successful_indices = 0
             failed_indices = 0
             app_logger.info(f"Generating embeddings for {len(to_index)} new or updated entries in parallel batches...")
-            results = await generate_embeddings_batch(to_index, batch_size=50)
+            results = await generate_embeddings_batch(to_index, batch_size=50, max_concurrent_batches=5)
             successful_indices = len(results)
             failed_indices = len(to_index) - successful_indices
             app_logger.info(f"Embeddings generated: {successful_indices} successful, {failed_indices} failed.")
@@ -211,28 +257,40 @@ async def startup_event():
             # Upsert new or updated points to Qdrant in batches
             if points:
                 app_logger.info(f"Upserting {len(points)} points to Qdrant in batches...")
-                await upsert_batch_to_qdrant(points, batch_size=100)
+                await upsert_batch_to_qdrant(points, batch_size=200)
                 app_logger.info(f"Incremental indexing completed: {successful_indices} entries indexed, {failed_indices} entries skipped due to errors.")
             else:
                 app_logger.warning("No new or updated points to upsert to Qdrant.")
         else:
             app_logger.info("No new or updated items to index. Skipping embedding and upsert steps.")
 
-        # Handle deletion of outdated knowledge base entries no longer present in KNOWLEDGE_BASE
-        points_to_delete = []
+        # Log outdated points but do not delete them to prevent potential data loss
+        outdated_points = []
         for point_id in existing_points:
             if point_id not in kb_hashes:
-                app_logger.debug(f"Item no longer in knowledge base, marking for deletion: {existing_points[point_id]['query'][:30]}... (ID: {point_id})")
-                points_to_delete.append(point_id)
-        if points_to_delete:
-            app_logger.info(f"Deleting {len(points_to_delete)} outdated points from Qdrant.")
-            await asyncio.to_thread(
-                vector_db_service.client.delete,
-                collection_name=vector_db_service.collection_name,
-                points_selector=points_to_delete
-            )
+                outdated_points.append(point_id)
+                app_logger.warning(f"Item no longer in knowledge base, but NOT deleting to avoid data loss: {existing_points[point_id]['query'][:30]}... (ID: {point_id})")
+        if outdated_points:
+            app_logger.info(f"Found {len(outdated_points)} potentially outdated points in Qdrant, but skipping deletion for safety.")
         else:
-            app_logger.info("No outdated points to delete from Qdrant.")
+            app_logger.info("No potentially outdated points found in Qdrant.")
+
+        # Final check post-indexing for critical entries with broader search
+        search_result_post = await asyncio.to_thread(
+            vector_db_service.client.scroll,
+            collection_name=vector_db_service.collection_name,
+            limit=100,  # Broader search to catch any matches
+            with_payload=True,
+            with_vectors=False
+        )
+        kion_found_post = False
+        for point in search_result_post[0]:
+            query_text = point.payload.get("query", "").lower()
+            if "кион" in query_text or "kion" in query_text:
+                app_logger.info(f"Post-indexing check: Found 'кион/KION' related entry in Qdrant: {point.payload}")
+                kion_found_post = True
+        if not kion_found_post:
+            app_logger.error("Post-indexing check failed: No 'кион/KION' related entries found in Qdrant even after reindexing. Check embedding generation, storage logic, or KNOWLEDGE_BASE content.")
 
     except Exception as e:
         app_logger.error(f"Failed to perform incremental indexing of knowledge base: {str(e)}")
