@@ -44,12 +44,6 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
         app_logger.debug(f"Retrieved history for customer {phone_number}: {len(history)} turns")
         log_history_retrieval(phone_number, len(history))
         
-        # Format history for agent processing to maintain conversation flow
-        formatted_history = [
-            {"role": turn["role"], "content": turn["user_text"] if turn["role"] == "user" else turn["operator_response"]}
-            for turn in history
-        ]
-
         # Execute independent agents sequentially to manage API rate limits
         intent_result = await intent_agent.detect_intent(user_text, history=history)
         app_logger.debug(f"Completed Intent Agent for {phone_number}")
