@@ -9,7 +9,7 @@ router = APIRouter()
     "/create",
     response_model=CustomerCreateResponse,
     summary="Create or Update Customer Profile",
-    description="Creates or updates a customer profile in the database using the provided phone number as the unique identifier. All customer attributes can be specified for detailed personalization.",
+    description="Creates or updates a customer profile using the phone number as a unique identifier. Supports detailed personalization with customer attributes.",
     status_code=status.HTTP_200_OK,
 )
 async def create_customer(
@@ -17,15 +17,15 @@ async def create_customer(
 ):
     """
     Endpoint to create or update a customer profile in the Qdrant customers collection.
-    If a customer with the same phone number exists, it will be updated.
+    Updates existing profiles if the phone number matches.
     """
     try:
-        # Check if customer already exists
+        # Log operation type based on whether customer exists
         existing_customer = await vector_db_service.retrieve_customer(customer_data.phone_number)
         operation_type = "Updating" if existing_customer else "Creating"
         app_logger.info(f"{operation_type} customer profile for {customer_data.phone_number}")
 
-        # Upsert customer data (create or update)
+        # Upsert customer data to Qdrant
         success = await vector_db_service.upsert_customer(customer_data)
         if not success:
             log_customer_creation(customer_data.phone_number, False, "Failed to store customer profile.")
@@ -51,12 +51,13 @@ async def create_customer(
     "/retrieve/{phone_number}",
     response_model=CustomerRetrieveResponse,
     summary="Retrieve Customer Profile",
-    description="Retrieves a customer profile from the database using the provided phone number as the unique identifier.",
+    description="Retrieves a customer profile using the provided phone number as the unique identifier.",
     status_code=status.HTTP_200_OK,
 )
 async def retrieve_customer(phone_number: str):
     """
-    Endpoint to retrieve a customer profile from the Qdrant customers collection by phone number.
+    Endpoint to fetch a customer profile from the Qdrant customers collection by phone number.
+    Returns null if no profile exists.
     """
     try:
         customer = await vector_db_service.retrieve_customer(phone_number)

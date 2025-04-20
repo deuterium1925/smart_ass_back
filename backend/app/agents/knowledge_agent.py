@@ -8,9 +8,9 @@ from app.utils.logger import app_logger
 
 async def find_knowledge(text: str) -> AgentResponse:
     """
-    Find relevant knowledge from the vector database using vector similarity,
-    then generate a natural language response using an LLM based on retrieved content.
-    Optimizes content length for downstream agents like action_agent.
+    Retrieve relevant information from the vector database using similarity search, then generate a natural
+    language response with an LLM. Optimizes output length for use by downstream agents like action_agent.
+    Returns an AgentResponse with knowledge content and confidence score for operator support.
     """
     settings = get_settings()
     try:
@@ -27,12 +27,12 @@ async def find_knowledge(text: str) -> AgentResponse:
                 error="No matching knowledge base entries."
             )
 
-        # Log all retrieved results for debugging
+        # Log retrieved documents for debugging
         app_logger.debug(f"Knowledge Agent: Retrieved {len(results)} documents for query: {text[:50]}")
         for i, result in enumerate(results):
             app_logger.debug(f"Document {i+1}: Query='{result.get('query', 'unknown')}', Score={result.get('score', 0.0)}")
 
-        # Extract relevant content and scores from the top results
+        # Extract content and scores from top results with sufficient relevance
         knowledge_chunks = []
         sources = []
         avg_relevance_score = 0.0
@@ -42,7 +42,7 @@ async def find_knowledge(text: str) -> AgentResponse:
             query = result.get("query", "unknown")
             source = result.get("sources", "")
             
-            if relevance_score >= 0.5:  # Lowered threshold for debugging
+            if relevance_score >= 0.5:  # Threshold for debugging
                 knowledge_chunks.append(f"Документ: {query}\nСодержание: {content}")
                 if source and source not in sources:
                     sources.append(source)
@@ -59,12 +59,12 @@ async def find_knowledge(text: str) -> AgentResponse:
 
         avg_relevance_score /= len(knowledge_chunks)
         context = "\n\n".join(knowledge_chunks)
-        # Reduced truncation limit to ensure it fits within action agent's prompt
+        # Truncate context to prevent token overflow in downstream processing
         if len(context) > 800:
             context = context[:800] + "... (сокращено для обработки)"
             app_logger.debug(f"Knowledge Agent: Context truncated to 800 characters for query: {text[:50]}")
         
-        # Generate a response using LLM based on retrieved context
+        # Generate a concise response using LLM based on retrieved context
         prompt = f"""
         Вы - ассистент контакт-центра, помогающий оператору ответить на запрос клиента.
         Ваша задача - сформулировать точный, полезный и естественный ответ на основе предоставленной информации из базы знаний.
@@ -82,12 +82,12 @@ async def find_knowledge(text: str) -> AgentResponse:
         generated_response = await llm_service.call_llm(
             prompt=prompt,
             model_name=settings.KNOWLEDGE_MODEL,
-            temperature=0.5  # Moderate temperature for balanced creativity and accuracy
+            temperature=0.5  # Moderate temperature for balanced output
         )
         
         if not generated_response:
             app_logger.error(f"Knowledge Agent: Failed to generate response for query: {text[:50]}")
-            # Fallback to raw content from the top document if LLM fails
+            # Fallback to raw content from top document if LLM fails
             fallback_content = results[0].get("text", "Информация по вашему запросу найдена, но сгенерировать ответ не удалось. Вот основное содержание из базы знаний.")
             if len(fallback_content) > 500:
                 fallback_content = fallback_content[:500] + "..."
@@ -107,8 +107,7 @@ async def find_knowledge(text: str) -> AgentResponse:
                 error="LLM response generation failed, using fallback content."
             )
 
-        # Prepare the response with the generated content
-        # Ensure generated response is also truncated if too long for downstream agents
+        # Truncate generated response to ensure compatibility with downstream agents
         if len(generated_response) > 800:
             generated_response = generated_response[:800] + "... (сокращено)"
             app_logger.debug(f"Knowledge Agent: Generated response truncated to 800 characters for query: {text[:50]}")

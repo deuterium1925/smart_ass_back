@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any
 
 class Customer(BaseModel):
+    """Represents a customer profile with attributes for personalized operator assistance in contact centers."""
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     is_mts_subscriber: bool = Field(default=False, description="Whether the customer is an MTS subscriber.")
     tariff_plan: Optional[str] = Field(default=None, description="Tariff plan of the customer (e.g., convergent plan).")
@@ -36,25 +37,30 @@ class Customer(BaseModel):
         return v
 
 class CustomerCreateRequest(Customer):
+    """Request model for creating or updating a customer profile in the vector database."""
     pass
 
 class OperatorResponseInput(BaseModel):
+    """Input model for submitting an operator's response to update conversation history."""
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     user_text: str = Field(..., description="The user message to pair with the operator response.")
     operator_response: str = Field(..., description="The response from the operator for the current turn.")
     timestamp: str = Field(..., description="Timestamp of the conversation turn to update.")
 
 class CustomerCreateResponse(BaseModel):
+    """Response model for customer profile creation or update operations."""
     status: str = Field(..., description="Status of the customer creation operation.")
     phone_number: str = Field(..., description="Phone number of the created customer.")
     message: Optional[str] = Field(default=None, description="Additional message or error detail.")
 
 class CustomerRetrieveResponse(BaseModel):
+    """Response model for retrieving a customer profile."""
     status: str = Field(..., description="Status of the retrieval operation.")
     customer: Optional[Customer] = Field(default=None, description="Retrieved customer data.")
     message: Optional[str] = Field(default=None, description="Additional message or error detail.")
 
 class HistoryEntry(BaseModel):
+    """Represents a single turn in a customer's conversation history for context in agent processing."""
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     user_text: str = Field(default="", description="Text from the user.")
     operator_response: str = Field(default="", description="Response from the operator.")
@@ -62,6 +68,7 @@ class HistoryEntry(BaseModel):
     role: str = Field(default="unknown", description="Role of the speaker (user/assistant/unknown).")
 
 class UserMessageInput(BaseModel):
+    """Input model for processing a user's message in the contact center system."""
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     user_text: str = Field(..., description="The latest message from the user in Russian.")
     operator_response: Optional[str] = Field(
@@ -69,22 +76,26 @@ class UserMessageInput(BaseModel):
     )
 
 class AgentResponse(BaseModel):
+    """Represents the output from an agent (e.g., Intent, Emotion) with results and confidence."""
     agent_name: str = Field(..., description="Name of the agent providing the response.")
     result: Any = Field(..., description="Result or analysis from the agent.")
     confidence: Optional[float] = Field(default=None, description="Confidence score for the result.")
     error: Optional[str] = Field(default=None, description="Error message if processing failed.")
 
 class Suggestion(BaseModel):
+    """Represents a suggested action or response for the operator to use with a customer."""
     text: str = Field(..., description="Suggested action or response for the operator in Russian.")
     type: str = Field(..., description="Type of suggestion (e.g., 'discount_offer', 'problem_resolution').")
     priority: Optional[int] = Field(default=1, description="Priority level of the suggestion (1-5).")
 
 class KnowledgeResult(BaseModel):
+    """Represents a result from the knowledge base search with content and relevance score."""
     document_id: str = Field(..., description="ID of the retrieved document.")
     content: str = Field(..., description="Relevant content snippet from the knowledge base.")
     relevance_score: float = Field(..., description="Relevance score for the document.")
 
 class ProcessingResultOutput(BaseModel):
+    """Output model consolidating results from all agents for operator assistance."""
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     intent: Optional[AgentResponse] = Field(default=None, description="Intent detection result.")
     emotion: Optional[AgentResponse] = Field(default=None, description="Emotion analysis result.")

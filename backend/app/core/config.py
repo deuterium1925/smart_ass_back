@@ -3,6 +3,10 @@ from functools import lru_cache
 from typing import Optional
 
 class Settings(BaseSettings):
+    """
+    Application configuration settings loaded from environment variables.
+    Manages API keys, URLs, model names, and operational parameters for the multi-agent system.
+    """
     MWS_API_KEY: str
     MWS_BASE_URL: str
 
@@ -28,10 +32,14 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: str = "DEBUG"
     MAX_RETRIES: int = 3
-    REQUEST_TIMEOUT: float = 60.0  # Increased from 30.0 to 60.0 for LLM calls
+    REQUEST_TIMEOUT: float = 60.0  # Increased from 30.0 to 60.0 for LLM calls for debugging
 
     model_config = SettingsConfigDict(env_file='.env', extra='ignore', env_file_encoding='utf-8')
 
 @lru_cache()
 def get_settings() -> Settings:
+    """
+    Retrieve cached application settings for efficient access.
+    Uses LRU cache to avoid reloading environment variables repeatedly.
+    """
     return Settings()

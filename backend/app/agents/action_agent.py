@@ -13,9 +13,9 @@ async def suggest_actions(
     history: Optional[List[HistoryEntry]] = None
 ) -> List[Suggestion]:
     """
-    Suggest three actionable responses for the operator based on intent, emotion, knowledge results,
-    customer profile, and conversation history. Ensures suggestions are diverse, prioritized,
-    and personalized for the contact center context. Returns a list of Suggestion objects in Russian.
+    Suggest three distinct actionable responses for the operator based on intent, emotion, knowledge,
+    customer profile, and conversation history. Ensures personalized, prioritized suggestions in Russian
+    for real-time contact center support. Returns a list of Suggestion objects.
     """
     settings = get_settings()
     intent = intent_response.result.get("intent", "unknown")
@@ -23,13 +23,13 @@ async def suggest_actions(
     emotion = emotion_response.result.get("emotion", "neutral")
     emotion_confidence = emotion_response.confidence or 0.0
     
-    # Extract knowledge content if available
+    # Extract knowledge content if available, truncating for prompt brevity
     knowledge_content = ""
     if knowledge_response.result.get("knowledge"):
         knowledge_items = knowledge_response.result.get("knowledge", [])
         if knowledge_items:
             knowledge_content = knowledge_items[0].get("content", "")
-            if len(knowledge_content) > 800:  # Truncate to keep prompt manageable
+            if len(knowledge_content) > 800:  # Limit to prevent token overflow
                 knowledge_content = knowledge_content[:800] + "... (сокращено)"
         else:
             knowledge_content = "Информация из базы знаний отсутствует."
@@ -38,7 +38,7 @@ async def suggest_actions(
     
     app_logger.info(f"Action Agent: Generating suggestions for intent={intent}, emotion={emotion}")
 
-    # Build customer context for personalization
+    # Build customer context for personalized suggestions
     customer_context = ""
     if customer_data:
         app_logger.debug(f"Incorporating customer data for {customer_data.phone_number} into suggestions")
@@ -55,7 +55,7 @@ async def suggest_actions(
         app_logger.debug("No customer data provided, using generic suggestion logic")
         customer_context = "Информация о клиенте отсутствует. Используйте общие рекомендации без персонализации."
 
-    # Build conversation history context to avoid repetitive suggestions
+    # Build history context to avoid repetitive suggestions and enhance relevance
     history_context = ""
     if history and len(history) > 0:
         app_logger.debug(f"Incorporating conversation history with {len(history)} turns into suggestions")
@@ -73,7 +73,7 @@ async def suggest_actions(
         app_logger.debug("No conversation history provided, proceeding without historical context")
         history_context = "История диалога отсутствует. Базируйте предложения только на текущем сообщении."
 
-    # Craft a structured prompt for diverse, actionable, and prioritized suggestions
+    # Construct a structured prompt for generating diverse, prioritized suggestions
     prompt = f"""
     Вы - ассистент контакт-центра, помогающий оператору выбрать подходящие действия для общения с клиентом.
     Ваша задача - предложить ровно 3 конкретных, разнообразных действия или ответа для оператора на основе:
@@ -127,7 +127,7 @@ async def suggest_actions(
 
         app_logger.debug(f"Action Agent: Raw LLM response: {response[:200]}...")
         
-        # Clean response by removing markdown code blocks if present
+        # Clean and parse JSON response, removing markdown if present
         response_cleaned = response.strip().replace("```json", "").replace("```", "")
         try:
             suggestions_data = json.loads(response_cleaned)
@@ -143,12 +143,12 @@ async def suggest_actions(
                         type=item.get("type", "general"),
                         priority=item.get("priority", 1)
                     )
-                    if suggestion.text:  # Only add if text is non-empty
+                    if suggestion.text:  # Add only if text is non-empty
                         suggestions.append(suggestion)
                 except Exception as e:
                     app_logger.warning(f"Action Agent: Invalid suggestion format in response: {item}, error: {str(e)}")
 
-            # Ensure exactly 3 suggestions; use fallback if necessary
+            # Ensure exactly 3 suggestions, using fallback if needed
             if len(suggestions) != 3:
                 app_logger.warning(f"Action Agent: Expected 3 suggestions, got {len(suggestions)}. Using fallback to complete.")
                 fallback = fallback_suggestions(intent, emotion)
@@ -157,7 +157,7 @@ async def suggest_actions(
                     fb = fallback.pop(0)
                     if not any(s.text == fb.text for s in suggestions):
                         suggestions.append(fb)
-                # If still less than 3, log and return what we have
+                # Log if still less than 3 suggestions
                 if len(suggestions) < 3:
                     app_logger.error(f"Action Agent: Could not generate 3 suggestions even with fallback. Returning {len(suggestions)} suggestions.")
             
@@ -172,13 +172,13 @@ async def suggest_actions(
 
 def fallback_suggestions(intent: str, emotion: str) -> List[Suggestion]:
     """
-    Provide fallback suggestions based on intent and emotion when LLM fails.
-    Returns a list of up to 3 Suggestion objects.
+    Generate fallback suggestions based on intent and emotion when LLM fails.
+    Returns up to 3 Suggestion objects tailored to contact center scenarios.
     """
     app_logger.info(f"Action Agent: Using fallback suggestions for intent={intent}, emotion={emotion}")
     suggestions = []
     
-    # Default suggestion based on emotion
+    # Emotion-based suggestion for handling customer sentiment
     if emotion in ["angry", "frustrated", "negative"]:
         suggestions.append(Suggestion(
             text="Предложите клиенту компенсацию или скидку для смягчения негативных эмоций.",
@@ -192,7 +192,7 @@ def fallback_suggestions(intent: str, emotion: str) -> List[Suggestion]:
             priority=2
         ))
 
-    # Suggestion based on intent
+    # Intent-based suggestion for targeted problem resolution
     if intent == "billing_issue":
         suggestions.append(Suggestion(
             text="Проверьте состояние счета клиента и предложите варианты оплаты или скидку.",
@@ -218,7 +218,7 @@ def fallback_suggestions(intent: str, emotion: str) -> List[Suggestion]:
             priority=3
         ))
 
-    # Add a generic third suggestion if needed
+    # Add a generic follow-up if fewer than 3 suggestions
     if len(suggestions) < 3:
         suggestions.append(Suggestion(
             text="Спросите клиента, есть ли дополнительные вопросы или проблемы, которые нужно решить.",

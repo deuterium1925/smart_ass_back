@@ -6,22 +6,22 @@ from app.utils.logger import app_logger, log_message_processing, log_history_sto
 
 router = APIRouter()
 
-# Existing endpoint for user message processing
 @router.post(
     "/process",
     response_model=ProcessingResultOutput,
     summary="Process User Message",
-    description="Receives a user message, orchestrates agent processing, and returns results/suggestions. Uses phone_number as the sole identifier for the customer.",
+    description="Receives a user message, orchestrates agent processing, and returns results/suggestions. Uses phone_number as the customer identifier.",
     status_code=status.HTTP_200_OK,
 )
 async def handle_process_message(
     payload: UserMessageInput = Body(...)
 ):
     """
-    Endpoint to process an incoming user message for a specific customer identified by phone_number.
+    Endpoint to process a user message for a customer identified by phone_number.
+    Orchestrates multiple agents for intent, emotion, and action suggestions.
     """
     try:
-        # Validate user_text is not empty or whitespace-only
+        # Ensure user_text is not empty or only whitespace
         if not payload.user_text or payload.user_text.strip() == "":
             log_message_processing(payload.phone_number, "FAILED", "User input is empty or contains only whitespace.")
             raise HTTPException(
@@ -44,19 +44,19 @@ async def handle_process_message(
             detail=f"An unexpected error occurred: {e}",
         )
 
-# New endpoint to submit operator response and update conversation turn
 @router.post(
     "/submit_operator_response",
     response_model=dict,
     summary="Submit Operator Response",
-    description="Submits the operator's response for a specific user message and updates the conversation history.",
+    description="Submits the operator's response for a user message and updates conversation history.",
     status_code=status.HTTP_200_OK,
 )
 async def submit_operator_response(
     payload: OperatorResponseInput = Body(...)
 ):
     """
-    Endpoint to submit the operator's response and update the corresponding conversation turn in the history.
+    Endpoint to update a conversation turn with the operator's response in history.
+    Identifies the turn using phone_number and timestamp.
     """
     try:
         log_message_processing(payload.phone_number, "STARTED", "Submitting operator response.")

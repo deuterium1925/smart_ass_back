@@ -11,11 +11,9 @@ from app.services.vector_db import vector_db_service
 
 async def process_user_message(payload: UserMessageInput) -> ProcessingResultOutput:
     """
-    Orchestrates the processing of a user message through multiple specialized agents.
-    Fetches customer data before processing for personalized responses.
-    Handles individual agent failures gracefully to ensure partial results are returned.
-    Incorporates long-term memory by retrieving and updating conversation history using phone_number.
-    Stores user message initially without operator response.
+    Orchestrates the processing of a user message through specialized agents for intent, emotion, and knowledge.
+    Retrieves customer data and conversation history for personalization and context.
+    Stores user messages in long-term memory and handles agent failures gracefully for partial results.
     """
     user_text = payload.user_text
     phone_number = payload.phone_number
@@ -23,7 +21,7 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
     timeout = 30.0
 
     try:
-        # Fetch customer data if phone_number is provided
+        # Fetch customer profile for personalized agent responses
         customer_data = None
         customer_fetch_error = None
         if phone_number:
@@ -40,18 +38,18 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
                 customer_data=None
             )
 
-        # Retrieve conversation history from long-term memory (server-side only)
+        # Retrieve conversation history from long-term memory for context
         history = await vector_db_service.retrieve_conversation_history(phone_number, limit=10)
         app_logger.debug(f"Retrieved history for customer {phone_number}: {len(history)} turns")
         log_history_retrieval(phone_number, len(history))
         
-        # Format history for agent processing (server-side history only)
+        # Format history for agent processing to maintain conversation flow
         formatted_history = [
             {"role": turn["role"], "content": turn["user_text"] if turn["role"] == "user" else turn["operator_response"]}
             for turn in history
         ]
 
-        # Run independent agents sequentially to avoid rate limits
+        # Execute independent agents sequentially to manage API rate limits
         intent_result = await intent_agent.detect_intent(user_text, history=history)
         app_logger.debug(f"Completed Intent Agent for {phone_number}")
         emotion_result = await emotion_agent.detect_emotion(user_text, history=history)
@@ -61,8 +59,8 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
 
         app_logger.debug(f"Customer {phone_number} - Intent: {intent_result.result}, Emotion: {emotion_result.result}")
 
-        # Store the current user message in long-term memory without operator response
-        timestamp = str(int(time.time()))  # Use current timestamp as a simple ordering mechanism
+        # Store current user message in long-term memory without operator response initially
+        timestamp = str(int(time.time()))  # Simple timestamp for ordering conversation turns
         success = await vector_db_service.store_conversation_turn(phone_number, user_text, "", timestamp)
         if not success:
             log_history_storage(phone_number, False, "Failed to store user message.")
@@ -70,7 +68,7 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
         else:
             log_history_storage(phone_number, True, "User message stored successfully.")
 
-        # Assemble final response
+        # Compile final response with results from all agents
         consolidated_output = f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'"
         if customer_fetch_error:
             consolidated_output += f" | {customer_fetch_error}"
@@ -87,9 +85,9 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             summary=await summary_agent.summarize_turn(user_text, intent_result, emotion_result, knowledge_result),
             qa_feedback=await qa_agent.check_quality(user_text, ""),
             consolidated_output=consolidated_output,
-            conversation_history=history,  # Include retrieved history
-            history_storage_status=success,  # Indicate storage status
-            customer_data=customer_data  # Include customer data for frontend
+            conversation_history=history,  # Include retrieved history for reference
+            history_storage_status=success,  # Indicate success/failure of history storage
+            customer_data=customer_data  # Provide customer data for frontend use
         )
         app_logger.info(f"Orchestrator: Completed processing for customer {phone_number}")
         return output

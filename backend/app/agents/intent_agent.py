@@ -7,22 +7,22 @@ from app.utils.logger import app_logger
 
 async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None) -> AgentResponse:
     """
-    Detect the intent of the user's message using MWS GPT API, incorporating conversation history for context.
-    Returns an AgentResponse with the detected intent and confidence score.
-    Includes fallback logic to handle malformed or unexpected LLM responses.
+    Detect the intent of a user's message using the MWS GPT API, leveraging conversation history for context.
+    Returns an AgentResponse with the detected intent and confidence score for operator guidance.
+    Includes fallback logic to handle LLM response parsing failures.
     """
     settings = get_settings()
-    # Define possible intents for fallback classification if parsing fails
+    # Predefined intent categories for classification and fallback
     possible_intents = [
         "billing_issue", "technical_support", "complaint", "product_info", "other"
     ]
     
-    # Build history context if provided
+    # Incorporate conversation history if available to improve intent accuracy
     history_context = ""
     if history and len(history) > 0:
         app_logger.debug(f"Intent Agent: Incorporating history with {len(history)} turns for text: {text[:50]}")
         history_texts = []
-        for turn in history[-3:]:  # Limit to last 3 turns for brevity
+        for turn in history[-3:]:  # Limit to last 3 turns to manage token usage
             user_text = turn.user_text if turn.user_text else "Не указано"
             op_response = turn.operator_response if turn.operator_response else "Ответ оператора отсутствует"
             history_texts.append(f"Клиент: {user_text} | Оператор: {op_response}")
@@ -34,7 +34,7 @@ async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None)
     else:
         history_context = "История диалога отсутствует. Определяйте намерение только на основе текущего сообщения."
 
-    # Craft a detailed and structured prompt to improve response consistency
+    # Construct a structured prompt for precise intent detection in Russian
     prompt = f"""
     Вы - ассистент контакт-центра, специализирующийся на определении намерений клиента.
     Ваша задача - проанализировать сообщение клиента на русском языке и определить его основное намерение.
@@ -55,7 +55,7 @@ async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None)
         response = await llm_service.call_llm(
             prompt=prompt,
             model_name=settings.INTENT_MODEL,
-            temperature=0.2  # Lower temperature for more deterministic JSON output
+            temperature=0.2  # Low temperature for deterministic JSON output
         )
         
         if not response:
@@ -68,16 +68,15 @@ async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None)
 
         app_logger.debug(f"Intent Agent: Raw LLM response: {response[:200]}...")
         
-        # Attempt to parse JSON from the response
+        # Parse JSON response, handling potential markdown formatting
         try:
-            # Handle cases where response might be wrapped in markdown code blocks
             response_cleaned = response.strip().replace("```json", "").replace("```", "")
             result = json.loads(response_cleaned)
             
             intent = result.get("intent", "unknown")
             confidence = result.get("confidence", 0.0)
             
-            # Validate intent against possible values
+            # Validate detected intent against predefined categories
             if intent not in possible_intents:
                 app_logger.warning(f"Intent Agent: Invalid intent '{intent}' detected, defaulting to 'other'")
                 intent = "other"
@@ -91,15 +90,15 @@ async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None)
             )
         except json.JSONDecodeError as jde:
             app_logger.warning(f"Intent Agent: Failed to parse JSON from LLM response: {response[:100]}... Error: {str(jde)}")
-            # Fallback: Search for keywords in the response text to guess intent
+            # Fallback to keyword search in response for intent estimation
             response_lower = response.lower()
             fallback_intent = "other"
-            fallback_confidence = 0.3  # Low confidence for fallback guess
+            fallback_confidence = 0.3  # Low confidence for fallback
             
             for intent in possible_intents:
                 if intent.replace("_", " ") in response_lower:
                     fallback_intent = intent
-                    fallback_confidence = 0.6  # Slightly higher confidence if keyword match
+                    fallback_confidence = 0.6  # Higher confidence on keyword match
                     break
             
             app_logger.info(f"Intent Agent: Fallback intent '{fallback_intent}' with confidence {fallback_confidence} for text: {text[:50]}")

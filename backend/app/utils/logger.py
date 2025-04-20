@@ -9,29 +9,29 @@ logger.add(
     level="DEBUG"
 )
 
-# Create a custom logger instance for the application
+# Custom logger instance for the application
 app_logger = logger
 
-# Enhanced logging functions for critical operations
+# Logging utility functions for critical operations
 def log_customer_creation(phone_number: str, success: bool, message: str = ""):
-    """Log customer creation or update operation with status and optional message."""
+    """Log the status of customer creation or update operation."""
     status = "SUCCESS" if success else "FAILURE"
     app_logger.info(f"Customer Creation | Phone: {phone_number} | Status: {status} | {message}")
 
 def log_customer_retrieval(phone_number: str, found: bool):
-    """Log customer retrieval operation with status."""
+    """Log the status of customer retrieval operation."""
     status = "FOUND" if found else "NOT FOUND"
     app_logger.info(f"Customer Retrieval | Phone: {phone_number} | Status: {status}")
 
 def log_history_storage(phone_number: str, success: bool, message: str = ""):
-    """Log conversation history storage operation with status and optional message."""
+    """Log the status of conversation history storage operation."""
     status = "SUCCESS" if success else "FAILURE"
     app_logger.info(f"History Storage | Phone: {phone_number} | Status: {status} | {message}")
 
 def log_history_retrieval(phone_number: str, count: int):
-    """Log conversation history retrieval operation with the number of entries retrieved."""
+    """Log the number of conversation history entries retrieved."""
     app_logger.info(f"History Retrieval | Phone: {phone_number} | Entries Retrieved: {count}")
 
 def log_message_processing(phone_number: str, status: str, message: str = ""):
-    """Log message processing operation with status and optional message."""
+    """Log the status of message processing operation."""
     app_logger.info(f"Message Processing | Phone: {phone_number} | Status: {status} | {message}")

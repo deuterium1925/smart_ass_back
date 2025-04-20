@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import List, Dict
 from app.utils.logger import app_logger
 
+# Static knowledge base entries hardcoded for initial support scenarios.
+# These serve as fallback data for the Knowledge Agent to assist operators with common queries.
 STATIC_KNOWLEDGE_BASE: List[Dict] = [
     {
         "query": "интернет",
@@ -542,9 +544,9 @@ STATIC_KNOWLEDGE_BASE: List[Dict] = [
 
 def load_additional_knowledge_base(data_dir: str = "app/data") -> List[Dict]:
     """
-    Load additional knowledge base entries from JSON files in the specified directory.
-    Normalizes the data to match the format of STATIC_KNOWLEDGE_BASE.
-    Returns a combined list of all knowledge base entries.
+    Load additional knowledge base entries from JSON files in the specified directory for the Knowledge Agent.
+    Normalizes data to match the STATIC_KNOWLEDGE_BASE format for consistent query handling.
+    Returns a combined list of all entries to support operator assistance with diverse customer queries.
     """
     knowledge_base = STATIC_KNOWLEDGE_BASE.copy()
     data_path = Path(data_dir)
@@ -565,7 +567,7 @@ def load_additional_knowledge_base(data_dir: str = "app/data") -> List[Dict]:
                 continue
                 
             for entry in data:
-                # Normalize the JSON data to match the expected format
+                # Normalize JSON data to ensure consistent structure for vector database indexing
                 normalized_entry = {
                     "query": entry.get("name", "Unknown Query"),
                     "correct_answer": entry.get("content", "No content available."),
@@ -579,5 +581,5 @@ def load_additional_knowledge_base(data_dir: str = "app/data") -> List[Dict]:
     app_logger.info(f"Total knowledge base entries loaded: {len(knowledge_base)}")
     return knowledge_base
 
-# This will be used in main.py to get the full knowledge base
+# Combined knowledge base for use in main.py during startup to populate the vector database
 KNOWLEDGE_BASE = load_additional_knowledge_base()

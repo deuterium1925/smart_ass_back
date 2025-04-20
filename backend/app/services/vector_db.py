@@ -9,6 +9,7 @@ from typing import List, Dict, Optional
 from app.models.schemas import Customer
 
 class VectorDBService:
+    """Manages interactions with Qdrant vector database for storing and retrieving knowledge, history, and customer data."""
     def __init__(self):
         self.settings = get_settings()
         self.client = QdrantClient(
@@ -20,13 +21,13 @@ class VectorDBService:
         self.history_collection_name = "conversation_history"
         self.customers_collection_name = "customers"
         self.embedding_model = self.settings.EMBEDDING_MODEL
-        self.vector_size = None  # Will be set dynamically after first embedding
+        self.vector_size = None  # Set dynamically after first embedding
         self.timeout = aiohttp.ClientTimeout(total=self.settings.REQUEST_TIMEOUT)
 
     async def ensure_collection(self):
         """
-        Ensure the knowledge base, history, and customers collections exist in Qdrant with dynamic vector size.
-        Includes performance optimization by creating payload indexes for faster filtering on phone_number.
+        Ensures the existence of collections for knowledge, history, and customers in Qdrant.
+        Dynamically sets vector size and creates payload indexes on phone_number for faster filtering.
         """
         try:
             collections = await asyncio.to_thread(self.client.get_collections)
@@ -60,24 +61,23 @@ class VectorDBService:
                     self.vector_size = collection_info.config.params.vectors.size
                     app_logger.info(f"Retrieved vector size from existing collection: {self.vector_size}")
 
-            # Handle conversation history collection with payload index for phone_number
+            # Handle conversation history collection with index for efficient lookups
             if self.history_collection_name not in collection_names:
                 await asyncio.to_thread(
                     self.client.create_collection,
                     collection_name=self.history_collection_name,
                     vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
                 )
-                # Create index on phone_number for faster filtering
                 await asyncio.to_thread(
                     self.client.create_payload_index,
                     collection_name=self.history_collection_name,
                     field_name="phone_number",
                     field_type="keyword"
                 )
-                app_logger.info(f"Created collection {self.history_collection_name} in Qdrant for conversation history with index on phone_number")
+                app_logger.info(f"Created collection {self.history_collection_name} with index on phone_number")
             else:
                 app_logger.debug(f"Collection {self.history_collection_name} already exists")
-                # Check if index exists, create if not (for backward compatibility with existing collections)
+                # Ensure index exists for backward compatibility
                 indexes = await asyncio.to_thread(
                     self.client.get_collection,
                     collection_name=self.history_collection_name
@@ -91,24 +91,22 @@ class VectorDBService:
                     )
                     app_logger.info(f"Added index on phone_number for {self.history_collection_name}")
 
-            # Handle customers collection with payload index for phone_number
+            # Handle customers collection with index for efficient retrieval
             if self.customers_collection_name not in collection_names:
                 await asyncio.to_thread(
                     self.client.create_collection,
                     collection_name=self.customers_collection_name,
                     vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
                 )
-                # Create index on phone_number for faster filtering
                 await asyncio.to_thread(
                     self.client.create_payload_index,
                     collection_name=self.customers_collection_name,
                     field_name="phone_number",
                     field_type="keyword"
                 )
-                app_logger.info(f"Created collection {self.customers_collection_name} in Qdrant for customer profiles with index on phone_number")
+                app_logger.info(f"Created collection {self.customers_collection_name} with index on phone_number")
             else:
                 app_logger.debug(f"Collection {self.customers_collection_name} already exists")
-                # Check if index exists, create if not
                 indexes = await asyncio.to_thread(
                     self.client.get_collection,
                     collection_name=self.customers_collection_name
@@ -125,7 +123,7 @@ class VectorDBService:
             app_logger.error(f"Error creating or retrieving collections in Qdrant: {e}")
 
     async def get_embedding(self, text: str) -> Optional[List[float]]:
-        """Generate embedding for the given text using MWS API with stricter response validation."""
+        """Generate embedding for text using MWS API with validation to ensure proper vector size."""
         retries = 0
         while retries < self.settings.MAX_RETRIES:
             try:
@@ -143,8 +141,8 @@ class VectorDBService:
                     )
                     if response.status == 200:
                         data = await response.json()
-                        if not isinstance(data, dict):
-                            app_logger.error("MWS Embedding API returned invalid response type, not a dictionary")
+                        if not isinstance(data, dict) or "data" not in data or not data["data"]:
+                            app_logger.error("MWS Embedding API response invalid or missing 'data' field")
                             retries += 1
                             await asyncio.sleep(2 ** retries)
                             continue
@@ -166,32 +164,33 @@ class VectorDBService:
                             continue
                         if self.vector_size is None:
                             self.vector_size = len(embedding)
-                            app_logger.info(f"Set vector size dynamically to {self.vector_size} based on first embedding")
+                            app_logger.info(f"Set vector size to {self.vector_size} from first embedding")
                         elif len(embedding) != self.vector_size:
-                            app_logger.error(f"MWS Embedding API returned embedding of size {len(embedding)}, expected {self.vector_size}")
+                            app_logger.error(f"Embedding size {len(embedding)} mismatches expected {self.vector_size}")
                             retries += 1
                             await asyncio.sleep(2 ** retries)
                             continue
                         return embedding
                     else:
-                        app_logger.warning(f"MWS Embedding API call failed with status {response.status}")
+                        app_logger.warning(f"MWS Embedding API failed with status {response.status}")
                         retries += 1
                         await asyncio.sleep(2 ** retries)
             except Exception as e:
-                app_logger.error(f"MWS Embedding API call error: {e}")
+                app_logger.error(f"MWS Embedding API error: {e}")
                 retries += 1
                 await asyncio.sleep(2 ** retries)
         app_logger.error(f"Max retries reached for embedding generation for text: {text[:30]}...")
         return None
 
     def generate_point_id(self, query_text: str, content_text: str = "") -> str:
-        """Generate a unique ID for Qdrant points based on the hash of the query and content text."""
+        """Generate a unique ID for Qdrant points using a hash of query and content text."""
         combined = query_text + content_text
         return hashlib.md5(combined.encode('utf-8')).hexdigest()
 
     async def query_vector_db(self, query_text: str, top_k: int = 3) -> List[Dict]:
         """
-        Query the vector DB for relevant documents based on the query text using MWS embeddings.
+        Query the vector DB for relevant documents based on text similarity.
+        Returns a list of matched documents with content and relevance scores for the Knowledge Agent.
         """
         try:
             app_logger.debug(f"Querying Vector DB for: {query_text[:30]}...")
@@ -225,26 +224,25 @@ class VectorDBService:
 
     async def store_conversation_turn(self, phone_number: str, user_text: str, operator_response: str = "", timestamp: str = "") -> bool:
         """
-        Store a single conversation turn in the history collection for long-term memory.
-        Validates that a customer exists in the customers collection before storing to prevent orphaned history entries.
-        Returns True if successful, False otherwise, with detailed logging for failures.
+        Store a conversation turn in the history collection for long-term memory.
+        Validates customer existence to prevent orphaned entries. Returns True if successful.
         """
         if not phone_number:
             app_logger.error("No phone number provided for storing conversation turn")
             return False
 
         try:
-            # Validate customer existence before storing history
+            # Ensure customer exists before storing history
             customer = await self.retrieve_customer(phone_number)
             if not customer:
-                app_logger.error(f"Cannot store conversation turn: No customer found with phone number {phone_number}")
+                app_logger.error(f"Cannot store turn: No customer found with phone number {phone_number}")
                 return False
 
             app_logger.debug(f"Storing conversation turn for customer {phone_number}")
             content = f"User: {user_text}\nOperator: {operator_response}" if operator_response else f"User: {user_text}"
             embedding = await self.get_embedding(content)
             if embedding is None:
-                app_logger.error(f"Failed to generate embedding for conversation turn for customer {phone_number}")
+                app_logger.error(f"Failed to generate embedding for turn for customer {phone_number}")
                 return False
 
             point_id = hashlib.md5(f"{phone_number}_{timestamp}_{user_text}".encode('utf-8')).hexdigest()
@@ -272,8 +270,7 @@ class VectorDBService:
 
     async def update_conversation_turn(self, phone_number: str, timestamp: str, user_text: str, operator_response: str) -> bool:
         """
-        Update an existing conversation turn with the operator's response.
-        Identifies the turn by phone_number and timestamp or user_text.
+        Update a conversation turn with the operator's response using phone_number and timestamp.
         Returns True if successful, False otherwise.
         """
         if not phone_number or not timestamp:
@@ -281,7 +278,6 @@ class VectorDBService:
             return False
 
         try:
-            # Find the existing turn to update
             search_result = await asyncio.to_thread(
                 self.client.scroll,
                 collection_name=self.history_collection_name,
@@ -304,7 +300,7 @@ class VectorDBService:
             content = f"User: {user_text}\nOperator: {operator_response}"
             embedding = await self.get_embedding(content)
             if embedding is None:
-                app_logger.error(f"Failed to generate updated embedding for conversation turn for customer {phone_number}")
+                app_logger.error(f"Failed to generate updated embedding for turn for customer {phone_number}")
                 return False
 
             updated_point = PointStruct(
@@ -331,20 +327,18 @@ class VectorDBService:
 
     async def retrieve_conversation_history(self, phone_number: str, limit: int = 10) -> List[Dict]:
         """
-        Retrieve conversation history for a given phone_number from the history collection.
-        Validates that a customer exists before attempting retrieval to avoid processing orphaned data.
-        Improved role determination prioritizes 'assistant' if operator_response is present, with logging for ambiguous cases.
-        Performance optimization: Uses indexed field phone_number for faster filtering.
+        Retrieve conversation history for a customer by phone_number, limited to recent turns.
+        Validates customer existence and uses indexed field for performance. Sorts by timestamp.
         """
         if not phone_number:
             app_logger.error("No phone number provided for retrieving conversation history")
             return []
 
         try:
-            # Validate customer existence before retrieving history
+            # Validate customer existence before retrieval
             customer = await self.retrieve_customer(phone_number)
             if not customer:
-                app_logger.error(f"Cannot retrieve conversation history: No customer found with phone number {phone_number}")
+                app_logger.error(f"Cannot retrieve history: No customer found with phone number {phone_number}")
                 return []
 
             app_logger.debug(f"Retrieving conversation history for customer {phone_number}")
@@ -362,30 +356,25 @@ class VectorDBService:
                     "user_text": point.payload.get("user_text", ""),
                     "operator_response": point.payload.get("operator_response", ""),
                     "timestamp": point.payload.get("timestamp", ""),
-                    # Improved role logic: Prioritize 'assistant' if operator_response is non-empty,
-                    # otherwise assign 'user' if user_text is non-empty, else 'unknown'
+                    # Role logic: assistant if operator response exists, else user if user text exists
                     "role": (
                         "assistant" if point.payload.get("operator_response", "").strip()
                         else "user" if point.payload.get("user_text", "").strip()
                         else "unknown"
                     )
                 }
-                for point in search_result[0]  # search_result[0] contains the list of points
+                for point in search_result[0]
             ]
-            # Log warnings for ambiguous or unknown roles
+            # Log warnings for ambiguous role assignments
             for entry in history:
                 user_text_present = bool(entry["user_text"].strip())
                 operator_resp_present = bool(entry["operator_response"].strip())
                 if entry["role"] == "unknown":
                     app_logger.warning(f"Unknown role for history entry for customer {phone_number}: Neither user_text nor operator_response present")
                 elif user_text_present and operator_resp_present:
-                    app_logger.warning(f"Ambiguous role for history entry for customer {phone_number}: Both user_text and operator_response present, assigned role={entry['role']}")
+                    app_logger.warning(f"Ambiguous role for history entry for customer {phone_number}: Both present, assigned role={entry['role']}")
 
-            # Sort by timestamp with fallback for missing or invalid values
-            history.sort(
-                key=lambda x: x.get("timestamp", "0"),  # Fallback to "0" if timestamp is missing
-                reverse=False
-            )
+            history.sort(key=lambda x: x.get("timestamp", "0"), reverse=False)
             app_logger.info(f"Retrieved {len(history)} conversation turns for customer {phone_number}")
             return history
         except Exception as e:
@@ -394,22 +383,17 @@ class VectorDBService:
 
     async def upsert_customer(self, customer: Customer) -> bool:
         """
-        Upsert a customer profile into the customers collection.
-        Generates an embedding for potential future vector similarity searches (e.g., finding similar profiles),
-        though currently retrieval uses exact phone_number matching for efficiency.
+        Upsert a customer profile into the customers collection for personalized agent responses.
         Returns True if successful, False otherwise.
         """
         try:
             app_logger.debug(f"Upserting customer profile for {customer.phone_number}")
-            # Generate an embedding for the phone number or a summary of customer data
-            # This is retained for potential future vector search capabilities.
             embedding_text = f"Customer: {customer.phone_number}"
             embedding = await self.get_embedding(embedding_text)
             if embedding is None:
                 app_logger.error(f"Failed to generate embedding for customer {customer.phone_number}")
                 return False
 
-            # Use hashed phone number as point ID for uniqueness
             point_id = self.generate_point_id(customer.phone_number)
             point = PointStruct(
                 id=point_id,
@@ -429,9 +413,8 @@ class VectorDBService:
 
     async def retrieve_customer(self, phone_number: str) -> Optional[Customer]:
         """
-        Retrieve a customer profile by phone number from the customers collection.
-        Optimized with indexed field phone_number for faster lookup.
-        Returns the Customer object if found, None otherwise.
+        Retrieve a customer profile by phone_number using indexed field for fast lookup.
+        Returns Customer object if found, None otherwise.
         """
         if not phone_number:
             app_logger.error("No phone number provided for retrieving customer profile")
@@ -447,8 +430,8 @@ class VectorDBService:
                 with_payload=True,
                 with_vectors=False
             )
-            if search_result[0]:  # search_result[0] contains the list of points
-                customer_data = search_result[0][0].payload  # First result
+            if search_result[0]:
+                customer_data = search_result[0][0].payload
                 app_logger.info(f"Retrieved customer profile for {phone_number}")
                 return Customer(**customer_data)
             else:
@@ -460,13 +443,12 @@ class VectorDBService:
 
     async def delete_orphaned_history(self) -> int:
         """
-        Delete conversation history entries that do not have a corresponding customer in the customers collection.
-        Returns the number of deleted entries.
+        Delete history entries without corresponding customer profiles.
+        Returns the number of deleted entries. Use with caution as this is permanent.
         Note: This is a maintenance operation and should be used with caution as it permanently deletes data.
         """
         try:
             app_logger.info("Starting cleanup of orphaned history entries")
-            # Retrieve all history entries (in batches if necessary)
             history_entries = []
             offset = None
             batch_size = 1000
