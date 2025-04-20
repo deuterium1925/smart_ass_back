@@ -81,7 +81,6 @@ venv.bak/
 *.bak
 
 # Docker files
-.dockerignore
 docker-compose.yml.override
 
 # Log files
