@@ -13,6 +13,7 @@ class LLMService:
     async def call_llm(self, prompt: str, model_name: str, temperature: float = 0.7) -> Optional[str]:
         """
         Call the MWS GPT API for chat completion with the given prompt.
+        Retries on transient errors (429 Rate Limit, 5xx Server Errors) but not on unrecoverable client errors (other 4xx).
         """
         retries = 0
         while retries < self.max_retries:
@@ -37,10 +38,13 @@ class LLMService:
                     if response.status == 200:
                         data = await response.json()
                         return data["choices"][0]["message"]["content"]
-                    else:
-                        app_logger.warning(f"MWS API call failed with status {response.status}")
+                    elif response.status == 429 or response.status >= 500:
+                        app_logger.warning(f"MWS API transient error {response.status} (retry {retries+1}/{self.max_retries})")
                         retries += 1
-                        await asyncio.sleep(2 ** retries)  # Exponential backoff
+                        await asyncio.sleep(2 ** retries)  # Exponential backoff for transient issues
+                    else:
+                        app_logger.error(f"MWS API unrecoverable error {response.status}: {await response.text()[:100]}...")
+                        return None  # Do not retry on other 4xx errors (e.g., 400, 403)
             except Exception as e:
                 app_logger.error(f"MWS API call error: {e}")
                 retries += 1

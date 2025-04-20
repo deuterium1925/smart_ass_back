@@ -273,7 +273,7 @@ class VectorDBService:
         """
         Retrieve conversation history for a given phone_number from the history collection.
         Validates that a customer exists before attempting retrieval to avoid processing orphaned data.
-        Improved role determination and timestamp sorting with fallback for missing/invalid data.
+        Improved role determination prioritizes 'assistant' if operator_response is present, with logging for ambiguous cases.
         Performance optimization: Uses indexed field phone_number for faster filtering.
         """
         if not phone_number:
@@ -302,17 +302,24 @@ class VectorDBService:
                     "user_text": point.payload.get("user_text", ""),
                     "operator_response": point.payload.get("operator_response", ""),
                     "timestamp": point.payload.get("timestamp", ""),
-                    # Improved role logic: Check for non-empty content
-                    "role": "user" if point.payload.get("user_text", "") != ""
-                            else "assistant" if point.payload.get("operator_response", "") != ""
-                            else "unknown"
+                    # Improved role logic: Prioritize 'assistant' if operator_response is non-empty,
+                    # otherwise assign 'user' if user_text is non-empty, else 'unknown'
+                    "role": (
+                        "assistant" if point.payload.get("operator_response", "").strip()
+                        else "user" if point.payload.get("user_text", "").strip()
+                        else "unknown"
+                    )
                 }
                 for point in search_result[0]  # search_result[0] contains the list of points
             ]
-            # Log warnings for ambiguous roles
+            # Log warnings for ambiguous or unknown roles
             for entry in history:
+                user_text_present = bool(entry["user_text"].strip())
+                operator_resp_present = bool(entry["operator_response"].strip())
                 if entry["role"] == "unknown":
-                    app_logger.warning(f"Ambiguous role for history entry for customer {phone_number}: {entry}")
+                    app_logger.warning(f"Unknown role for history entry for customer {phone_number}: Neither user_text nor operator_response present")
+                elif user_text_present and operator_resp_present:
+                    app_logger.warning(f"Ambiguous role for history entry for customer {phone_number}: Both user_text and operator_response present, assigned role={entry['role']}")
 
             # Sort by timestamp with fallback for missing or invalid values
             history.sort(
@@ -328,11 +335,14 @@ class VectorDBService:
     async def upsert_customer(self, customer: Customer) -> bool:
         """
         Upsert a customer profile into the customers collection.
+        Generates an embedding for potential future vector similarity searches (e.g., finding similar profiles),
+        though currently retrieval uses exact phone_number matching for efficiency.
         Returns True if successful, False otherwise.
         """
         try:
             app_logger.debug(f"Upserting customer profile for {customer.phone_number}")
             # Generate an embedding for the phone number or a summary of customer data
+            # This is retained for potential future vector search capabilities.
             embedding_text = f"Customer: {customer.phone_number}"
             embedding = await self.get_embedding(embedding_text)
             if embedding is None:
