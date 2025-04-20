@@ -52,9 +52,9 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
         ]
 
         # Run independent agents sequentially to avoid rate limits
-        intent_result = await intent_agent.detect_intent(user_text)
+        intent_result = await intent_agent.detect_intent(user_text, history=history)
         app_logger.debug(f"Completed Intent Agent for {phone_number}")
-        emotion_result = await emotion_agent.detect_emotion(user_text)
+        emotion_result = await emotion_agent.detect_emotion(user_text, history=history)
         app_logger.debug(f"Completed Emotion Agent for {phone_number}")
         knowledge_result = await knowledge_agent.find_knowledge(user_text)
         app_logger.debug(f"Completed Knowledge Agent for {phone_number}")
@@ -80,7 +80,10 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             intent=intent_result,
             emotion=emotion_result,
             knowledge=knowledge_result,
-            suggestions=await action_agent.suggest_actions(intent_result, emotion_result, knowledge_result, customer_data=customer_data),
+            suggestions=await action_agent.suggest_actions(
+                intent_result, emotion_result, knowledge_result, 
+                customer_data=customer_data, history=history
+            ),
             summary=await summary_agent.summarize_turn(user_text, intent_result, emotion_result, knowledge_result),
             qa_feedback=await qa_agent.check_quality(user_text, ""),
             consolidated_output=consolidated_output,

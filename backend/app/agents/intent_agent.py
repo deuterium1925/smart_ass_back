@@ -1,13 +1,13 @@
 import json
-from typing import Dict, Any
-from app.models.schemas import AgentResponse
+from typing import Dict, Any, List, Optional
+from app.models.schemas import AgentResponse, HistoryEntry
 from app.services.llm_service import llm_service
 from app.core.config import get_settings
 from app.utils.logger import app_logger
 
-async def detect_intent(text: str) -> AgentResponse:
+async def detect_intent(text: str, history: Optional[List[HistoryEntry]] = None) -> AgentResponse:
     """
-    Detect the intent of the user's message using MWS GPT API.
+    Detect the intent of the user's message using MWS GPT API, incorporating conversation history for context.
     Returns an AgentResponse with the detected intent and confidence score.
     Includes fallback logic to handle malformed or unexpected LLM responses.
     """
@@ -17,10 +17,28 @@ async def detect_intent(text: str) -> AgentResponse:
         "billing_issue", "technical_support", "complaint", "product_info", "other"
     ]
     
+    # Build history context if provided
+    history_context = ""
+    if history and len(history) > 0:
+        app_logger.debug(f"Intent Agent: Incorporating history with {len(history)} turns for text: {text[:50]}")
+        history_texts = []
+        for turn in history[-3:]:  # Limit to last 3 turns for brevity
+            user_text = turn.user_text if turn.user_text else "Не указано"
+            op_response = turn.operator_response if turn.operator_response else "Ответ оператора отсутствует"
+            history_texts.append(f"Клиент: {user_text} | Оператор: {op_response}")
+        history_context = f"""
+        История диалога (последние {len(history_texts)} сообщений):
+        {'; '.join(history_texts)}
+        Учитывайте историю для более точного определения намерения.
+        """
+    else:
+        history_context = "История диалога отсутствует. Определяйте намерение только на основе текущего сообщения."
+
     # Craft a detailed and structured prompt to improve response consistency
     prompt = f"""
     Вы - ассистент контакт-центра, специализирующийся на определении намерений клиента.
     Ваша задача - проанализировать сообщение клиента на русском языке и определить его основное намерение.
+    Учитывайте историю диалога, если она доступна, чтобы понять контекст общения.
     Ответ должен быть строго в формате JSON, как в примере ниже. Не добавляйте лишний текст или пояснения.
     Если намерение неясно, используйте категорию "other".
     Пример ответа:
@@ -29,6 +47,7 @@ async def detect_intent(text: str) -> AgentResponse:
         "confidence": 0.92
     }}
     Возможные категории намерений: {', '.join(possible_intents)}.
+    {history_context}
     Сообщение клиента для анализа: "{text}"
     """
     try:

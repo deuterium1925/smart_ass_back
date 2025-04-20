@@ -10,6 +10,7 @@ async def find_knowledge(text: str) -> AgentResponse:
     """
     Find relevant knowledge from the vector database using vector similarity,
     then generate a natural language response using an LLM based on retrieved content.
+    Optimizes content length for downstream agents like action_agent.
     """
     settings = get_settings()
     try:
@@ -58,17 +59,17 @@ async def find_knowledge(text: str) -> AgentResponse:
 
         avg_relevance_score /= len(knowledge_chunks)
         context = "\n\n".join(knowledge_chunks)
-        # Increased truncation limit to prevent losing critical info
-        if len(context) > 4000:
-            context = context[:4000] + "... (сокращено для обработки)"
-            app_logger.debug(f"Knowledge Agent: Context truncated to 4000 characters for query: {text[:50]}")
+        # Reduced truncation limit to ensure it fits within action agent's prompt
+        if len(context) > 800:
+            context = context[:800] + "... (сокращено для обработки)"
+            app_logger.debug(f"Knowledge Agent: Context truncated to 800 characters for query: {text[:50]}")
         
         # Generate a response using LLM based on retrieved context
         prompt = f"""
         Вы - ассистент контакт-центра, помогающий оператору ответить на запрос клиента.
         Ваша задача - сформулировать точный, полезный и естественный ответ на основе предоставленной информации из базы знаний.
         Используйте только релевантные данные из контекста. Если информация недостаточна, укажите это.
-        Ответ должен быть на русском языке, кратким и ориентированным на помощь клиенту.
+        Ответ должен быть на русском языке, кратким (не более 200 слов) и ориентированным на помощь клиенту.
         
         Запрос клиента: {text}
         Контекст из базы знаний:
@@ -107,6 +108,11 @@ async def find_knowledge(text: str) -> AgentResponse:
             )
 
         # Prepare the response with the generated content
+        # Ensure generated response is also truncated if too long for downstream agents
+        if len(generated_response) > 800:
+            generated_response = generated_response[:800] + "... (сокращено)"
+            app_logger.debug(f"Knowledge Agent: Generated response truncated to 800 characters for query: {text[:50]}")
+
         knowledge_result = KnowledgeResult(
             document_id="generated_response",
             content=generated_response,
