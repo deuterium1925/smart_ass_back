@@ -9,10 +9,10 @@ export default defineConfig({
   plugins: [vue(), vueDevTools()],
   server: {
     proxy: {
-      '/api': {
-        target: 'http://localhost:5000',
+      '/api/v1/customers/retrieve/': {
+        target: 'http://localhost:3000/',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+        rewrite: (path) => '/chats',
       },
     },
   },

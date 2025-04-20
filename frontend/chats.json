@@ -1,0 +1,34 @@
+{
+  "chats": [
+    {
+      "status": "string",
+      "phone_number": "8-916-999-99-56",
+      "message": "string",
+      "is_mts_subscriber": true,
+      "tariff_plan": "Конвергентный тарифный план Тариф №7 (мобильная связь МТС + домашний интернет + ТВ)",
+      "has_mobile": true,
+      "has_home_internet": true,
+      "has_home_tv": true,
+      "has_home_phone": false,
+      "device": "iPhone 16 Pro 256Gb",
+      "os": "iOS, версия 18.4",
+      "uses_my_mts_app": true,
+      "uses_personal_account": false,
+      "uses_mts_bank_app": true,
+      "uses_mts_money_app": false,
+      "subscriptions_and_services": "string",
+      "has_mts_premium": true,
+      "has_mts_cashback": true,
+      "has_defender_basic": true,
+      "has_defender_plus": false,
+      "has_kion_subscription": false,
+      "has_music_subscription": false,
+      "has_strings_subscription": false,
+      "has_mts_bank_debit_card": true,
+      "has_mts_bank_credit_card": false,
+      "has_mts_money_debit_card": false,
+      "has_mts_money_credit_card": false,
+      "has_mts_money_virtual_card": false
+    }
+  ]
+}
