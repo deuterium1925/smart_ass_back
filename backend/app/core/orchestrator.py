@@ -15,6 +15,7 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
     Fetches customer data before processing for personalized responses.
     Handles individual agent failures gracefully to ensure partial results are returned.
     Incorporates long-term memory by retrieving and updating conversation history using phone_number.
+    Stores user message initially without operator response.
     """
     user_text = payload.user_text
     phone_number = payload.phone_number
@@ -60,27 +61,14 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
 
         app_logger.debug(f"Customer {phone_number} - Intent: {intent_result.result}, Emotion: {emotion_result.result}")
 
-        # Extract operator response from payload if available, otherwise use a fallback
-        operator_response = getattr(payload, 'operator_response', '')
-        if not operator_response:
-            app_logger.debug(f"Customer {phone_number} - No operator response provided, using empty string as fallback")
-
-        # Run dependent agents sequentially to avoid rate limits
-        suggestions = await action_agent.suggest_actions(intent_result, emotion_result, knowledge_result, customer_data=customer_data)
-        app_logger.debug(f"Completed Action Agent for {phone_number}")
-        summary_result = await summary_agent.summarize_turn(user_text, intent_result, emotion_result, knowledge_result)
-        app_logger.debug(f"Completed Summary Agent for {phone_number}")
-        qa_feedback = await qa_agent.check_quality(user_text, operator_response)
-        app_logger.debug(f"Completed QA Agent for {phone_number}")
-
-        # Store the current conversation turn in long-term memory
+        # Store the current user message in long-term memory without operator response
         timestamp = str(int(time.time()))  # Use current timestamp as a simple ordering mechanism
-        success = await vector_db_service.store_conversation_turn(phone_number, user_text, operator_response, timestamp)
+        success = await vector_db_service.store_conversation_turn(phone_number, user_text, "", timestamp)
         if not success:
-            log_history_storage(phone_number, False, "Failed to store conversation turn.")
-            app_logger.warning(f"Failed to store conversation turn for customer {phone_number}; continuing processing")
+            log_history_storage(phone_number, False, "Failed to store user message.")
+            app_logger.warning(f"Failed to store user message for customer {phone_number}; continuing processing")
         else:
-            log_history_storage(phone_number, True, "Conversation turn stored successfully.")
+            log_history_storage(phone_number, True, "User message stored successfully.")
 
         # Assemble final response
         consolidated_output = f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'"
@@ -92,9 +80,9 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
             intent=intent_result,
             emotion=emotion_result,
             knowledge=knowledge_result,
-            suggestions=suggestions,
-            summary=summary_result,
-            qa_feedback=qa_feedback,
+            suggestions=await action_agent.suggest_actions(intent_result, emotion_result, knowledge_result, customer_data=customer_data),
+            summary=await summary_agent.summarize_turn(user_text, intent_result, emotion_result, knowledge_result),
+            qa_feedback=await qa_agent.check_quality(user_text, ""),
             consolidated_output=consolidated_output,
             conversation_history=history,  # Include retrieved history
             history_storage_status=success,  # Indicate storage status

@@ -247,7 +247,7 @@ class VectorDBService:
                 app_logger.error(f"Failed to generate embedding for conversation turn for customer {phone_number}")
                 return False
 
-            point_id = hashlib.md5(f"{phone_number}_{timestamp}_{content}".encode('utf-8')).hexdigest()
+            point_id = hashlib.md5(f"{phone_number}_{timestamp}_{user_text}".encode('utf-8')).hexdigest()
             point = PointStruct(
                 id=point_id,
                 vector=embedding,
@@ -268,6 +268,65 @@ class VectorDBService:
             return True
         except Exception as e:
             app_logger.error(f"Error storing conversation turn for customer {phone_number}: {e}")
+            return False
+
+    async def update_conversation_turn(self, phone_number: str, timestamp: str, user_text: str, operator_response: str) -> bool:
+        """
+        Update an existing conversation turn with the operator's response.
+        Identifies the turn by phone_number and timestamp or user_text.
+        Returns True if successful, False otherwise.
+        """
+        if not phone_number or not timestamp:
+            app_logger.error("No phone number or timestamp provided for updating conversation turn")
+            return False
+
+        try:
+            # Find the existing turn to update
+            search_result = await asyncio.to_thread(
+                self.client.scroll,
+                collection_name=self.history_collection_name,
+                scroll_filter={
+                    "must": [
+                        {"key": "phone_number", "match": {"value": phone_number}},
+                        {"key": "timestamp", "match": {"value": timestamp}},
+                        {"key": "user_text", "match": {"value": user_text}}
+                    ]
+                },
+                limit=1,
+                with_payload=True,
+                with_vectors=True
+            )
+            if not search_result[0]:
+                app_logger.error(f"No conversation turn found for customer {phone_number} with timestamp {timestamp}")
+                return False
+
+            point = search_result[0][0]
+            content = f"User: {user_text}\nOperator: {operator_response}"
+            embedding = await self.get_embedding(content)
+            if embedding is None:
+                app_logger.error(f"Failed to generate updated embedding for conversation turn for customer {phone_number}")
+                return False
+
+            updated_point = PointStruct(
+                id=point.id,
+                vector=embedding,
+                payload={
+                    "phone_number": phone_number,
+                    "user_text": user_text,
+                    "operator_response": operator_response,
+                    "timestamp": timestamp,
+                    "content": content
+                }
+            )
+            await asyncio.to_thread(
+                self.client.upsert,
+                collection_name=self.history_collection_name,
+                points=[updated_point]
+            )
+            app_logger.info(f"Updated conversation turn with operator response for customer {phone_number}")
+            return True
+        except Exception as e:
+            app_logger.error(f"Error updating conversation turn for customer {phone_number}: {e}")
             return False
 
     async def retrieve_conversation_history(self, phone_number: str, limit: int = 10) -> List[Dict]:

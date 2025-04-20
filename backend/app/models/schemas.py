@@ -38,6 +38,12 @@ class Customer(BaseModel):
 class CustomerCreateRequest(Customer):
     pass
 
+class OperatorResponseInput(BaseModel):
+    phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
+    user_text: str = Field(..., description="The user message to pair with the operator response.")
+    operator_response: str = Field(..., description="The response from the operator for the current turn.")
+    timestamp: str = Field(..., description="Timestamp of the conversation turn to update.")
+
 class CustomerCreateResponse(BaseModel):
     status: str = Field(..., description="Status of the customer creation operation.")
     phone_number: str = Field(..., description="Phone number of the created customer.")
