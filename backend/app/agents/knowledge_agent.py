@@ -15,7 +15,7 @@ async def find_knowledge(text: str) -> AgentResponse:
     try:
         app_logger.info(f"Knowledge Agent: Searching for relevant info for query: {text[:50]}...")
         # Query the vector DB service to get the top relevant documents
-        results = await vector_db_service.query_vector_db(text, top_k=3)
+        results = await vector_db_service.query_vector_db(text, top_k=5)  # Increased to 5 for debugging
         
         if not results:
             app_logger.warning(f"No relevant knowledge found for query: {text}")
@@ -25,6 +25,11 @@ async def find_knowledge(text: str) -> AgentResponse:
                 confidence=0.0,
                 error="No matching knowledge base entries."
             )
+
+        # Log all retrieved results for debugging
+        app_logger.debug(f"Knowledge Agent: Retrieved {len(results)} documents for query: {text[:50]}")
+        for i, result in enumerate(results):
+            app_logger.debug(f"Document {i+1}: Query='{result.get('query', 'unknown')}', Score={result.get('score', 0.0)}")
 
         # Extract relevant content and scores from the top results
         knowledge_chunks = []
@@ -36,14 +41,14 @@ async def find_knowledge(text: str) -> AgentResponse:
             query = result.get("query", "unknown")
             source = result.get("sources", "")
             
-            if relevance_score >= 0.7:  # Threshold for relevance
+            if relevance_score >= 0.5:  # Lowered threshold for debugging
                 knowledge_chunks.append(f"Документ: {query}\nСодержание: {content}")
                 if source and source not in sources:
                     sources.append(source)
                 avg_relevance_score += relevance_score
         
         if not knowledge_chunks:
-            app_logger.warning(f"No documents met relevance threshold for query: {text}")
+            app_logger.warning(f"No documents met relevance threshold (0.5) for query: {text}")
             return AgentResponse(
                 agent_name="KnowledgeAgent",
                 result={"knowledge": [], "message": "No relevant information found with sufficient confidence."},
@@ -53,6 +58,10 @@ async def find_knowledge(text: str) -> AgentResponse:
 
         avg_relevance_score /= len(knowledge_chunks)
         context = "\n\n".join(knowledge_chunks)
+        # Truncate context to prevent LLM overload
+        if len(context) > 2000:
+            context = context[:2000] + "... (сокращено для обработки)"
+            app_logger.debug(f"Knowledge Agent: Context truncated to 2000 characters for query: {text[:50]}")
         
         # Generate a response using LLM based on retrieved context
         prompt = f"""
@@ -77,11 +86,24 @@ async def find_knowledge(text: str) -> AgentResponse:
         
         if not generated_response:
             app_logger.error(f"Knowledge Agent: Failed to generate response for query: {text[:50]}")
+            # Fallback to raw content from the top document if LLM fails
+            fallback_content = results[0].get("text", "Информация по вашему запросу найдена, но сгенерировать ответ не удалось. Вот основное содержание из базы знаний.")
+            if len(fallback_content) > 500:
+                fallback_content = fallback_content[:500] + "..."
+            app_logger.info(f"Knowledge Agent: Using fallback content for query: {text[:50]}")
+            knowledge_result = KnowledgeResult(
+                document_id="fallback_response",
+                content=fallback_content,
+                relevance_score=avg_relevance_score
+            )
             return AgentResponse(
                 agent_name="KnowledgeAgent",
-                result={"knowledge": [], "message": "Failed to generate a response."},
+                result={
+                    "knowledge": [knowledge_result.dict()],
+                    "sources": "; ".join(sources) if sources else "No sources available."
+                },
                 confidence=avg_relevance_score,
-                error="LLM response generation failed."
+                error="LLM response generation failed, using fallback content."
             )
 
         # Prepare the response with the generated content

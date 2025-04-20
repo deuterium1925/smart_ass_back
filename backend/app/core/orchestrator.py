@@ -51,40 +51,13 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
                 for turn in history
             ]
 
-        # Run independent agents in parallel and handle exceptions individually
-        tasks = [
-            asyncio.create_task(intent_agent.detect_intent(user_text)),
-            asyncio.create_task(emotion_agent.detect_emotion(user_text)),
-            asyncio.create_task(knowledge_agent.find_knowledge(user_text))
-        ]
-
-        # Wait for all tasks to complete, with exceptions returned as results
-        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
-
-        # Process results, providing fallback responses for failed tasks
-        intent_result = results[0] if not isinstance(results[0], Exception) else AgentResponse(
-            agent_name="IntentAgent",
-            result={"intent": "unknown", "confidence": 0.0},
-            error="Task failed due to exception"
-        )
-        emotion_result = results[1] if not isinstance(results[1], Exception) else AgentResponse(
-            agent_name="EmotionAgent",
-            result={"emotion": "unknown", "confidence": 0.0},
-            error="Task failed due to exception"
-        )
-        knowledge_result = results[2] if not isinstance(results[2], Exception) else AgentResponse(
-            agent_name="KnowledgeAgent",
-            result={"knowledge": [], "message": "Error processing knowledge query."},
-            error="Task failed due to exception"
-        )
-
-        # Log individual errors for debugging
-        if isinstance(results[0], Exception):
-            app_logger.error(f"Intent Agent failed for customer {phone_number}: {str(results[0])}")
-        if isinstance(results[1], Exception):
-            app_logger.error(f"Emotion Agent failed for customer {phone_number}: {str(results[1])}")
-        if isinstance(results[2], Exception):
-            app_logger.error(f"Knowledge Agent failed for customer {phone_number}: {str(results[2])}")
+        # Run independent agents sequentially to avoid rate limits
+        intent_result = await intent_agent.detect_intent(user_text)
+        app_logger.debug(f"Completed Intent Agent for {phone_number}")
+        emotion_result = await emotion_agent.detect_emotion(user_text)
+        app_logger.debug(f"Completed Emotion Agent for {phone_number}")
+        knowledge_result = await knowledge_agent.find_knowledge(user_text)
+        app_logger.debug(f"Completed Knowledge Agent for {phone_number}")
 
         app_logger.debug(f"Customer {phone_number} - Intent: {intent_result.result}, Emotion: {emotion_result.result}")
 
@@ -93,45 +66,13 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
         if not operator_response:
             app_logger.debug(f"Customer {phone_number} - No operator response provided, using empty string as fallback")
 
-        # Run dependent agents (Action Suggestion, Summary, QA) in parallel
-        # Pass customer_data to action_agent for personalized suggestions
-        dependent_tasks = [
-            asyncio.create_task(
-                action_agent.suggest_actions(intent_result, emotion_result, knowledge_result, customer_data=customer_data)
-            ),
-            asyncio.create_task(
-                summary_agent.summarize_turn(user_text, intent_result, emotion_result, knowledge_result)
-            ),
-            asyncio.create_task(
-                qa_agent.check_quality(user_text, operator_response)
-            )
-        ]
-
-        # Wait for dependent tasks to complete, handling exceptions individually
-        dependent_results = await asyncio.wait_for(
-            asyncio.gather(*dependent_tasks, return_exceptions=True), timeout=timeout
-        )
-
-        # Process dependent task results with fallbacks
-        suggestions = dependent_results[0] if not isinstance(dependent_results[0], Exception) else []
-        summary_result = dependent_results[1] if not isinstance(dependent_results[1], Exception) else AgentResponse(
-            agent_name="SummaryAgent",
-            result={"summary": "Error generating summary."},
-            error="Task failed due to exception"
-        )
-        qa_feedback = dependent_results[2] if not isinstance(dependent_results[2], Exception) else AgentResponse(
-            agent_name="QualityAssuranceAgent",
-            result={"feedback": "Error during quality check."},
-            error="Task failed due to exception"
-        )
-
-        # Log errors for dependent tasks
-        if isinstance(dependent_results[0], Exception):
-            app_logger.error(f"Action Suggestion Agent failed for customer {phone_number}: {str(dependent_results[0])}")
-        if isinstance(dependent_results[1], Exception):
-            app_logger.error(f"Summary Agent failed for customer {phone_number}: {str(dependent_results[1])}")
-        if isinstance(dependent_results[2], Exception):
-            app_logger.error(f"QA Agent failed for customer {phone_number}: {str(dependent_results[2])}")
+        # Run dependent agents sequentially to avoid rate limits
+        suggestions = await action_agent.suggest_actions(intent_result, emotion_result, knowledge_result, customer_data=customer_data)
+        app_logger.debug(f"Completed Action Agent for {phone_number}")
+        summary_result = await summary_agent.summarize_turn(user_text, intent_result, emotion_result, knowledge_result)
+        app_logger.debug(f"Completed Summary Agent for {phone_number}")
+        qa_feedback = await qa_agent.check_quality(user_text, operator_response)
+        app_logger.debug(f"Completed QA Agent for {phone_number}")
 
         # Store the current conversation turn in long-term memory
         timestamp = str(int(time.time()))  # Use current timestamp as a simple ordering mechanism

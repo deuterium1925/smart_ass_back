@@ -98,7 +98,11 @@ async def startup_event():
     """Initialize services on startup with smarter incremental indexing."""
     app_logger.info("Starting up Smart Assistant Backend...")
     await vector_db_service.ensure_collection()
-    
+    # Temporarily clear collection for debugging
+    await asyncio.to_thread(vector_db_service.client.delete_collection, collection_name=vector_db_service.collection_name)
+    app_logger.info(f"Cleared collection {vector_db_service.collection_name} for re-indexing.")
+    await vector_db_service.ensure_collection()
+
     try:
         # Check and log status of all collections
         collection_info_knowledge = await asyncio.to_thread(
@@ -107,6 +111,21 @@ async def startup_event():
         )
         app_logger.info(f"Collection {vector_db_service.collection_name} status: {collection_info_knowledge.points_count} points")
 
+        # Additional check for specific entry
+        search_result = await asyncio.to_thread(
+            vector_db_service.client.scroll,
+            collection_name=vector_db_service.collection_name,
+            scroll_filter={"must": [{"key": "query", "match": {"value": "Безлимит кион"}}]},
+            limit=1,
+            with_payload=True,
+            with_vectors=False
+        )
+        if search_result[0]:
+            app_logger.info(f"Found 'Безлимит кион' in Qdrant: {search_result[0][0].payload}")
+        else:
+            app_logger.warning("Did not find 'Безлимит кион' in Qdrant. Data may not be indexed properly.")
+
+        # Rest of the existing code for history and customers collection checks
         collection_info_history = await asyncio.to_thread(
             vector_db_service.client.get_collection,
             collection_name=vector_db_service.history_collection_name

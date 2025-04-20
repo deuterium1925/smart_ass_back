@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     SUMMARY_MODEL: str
     QA_MODEL: str
 
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = "DEBUG"
     MAX_RETRIES: int = 3
-    REQUEST_TIMEOUT: float = 30.0
+    REQUEST_TIMEOUT: float = 60.0  # Increased from 30.0 to 60.0 for LLM calls
 
     model_config = SettingsConfigDict(env_file='.env', extra='ignore', env_file_encoding='utf-8')
 

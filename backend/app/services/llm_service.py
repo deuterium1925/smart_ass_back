@@ -37,16 +37,21 @@ class LLMService:
                     )
                     if response.status == 200:
                         data = await response.json()
+                        app_logger.debug(f"Received successful response from MWS model {model_name}")
                         return data["choices"][0]["message"]["content"]
                     elif response.status == 429 or response.status >= 500:
-                        app_logger.warning(f"MWS API transient error {response.status} (retry {retries+1}/{self.max_retries})")
+                        app_logger.warning(f"MWS API transient error {response.status} (retry {retries+1}/{self.max_retries}): {await response.text()[:100]}...")
                         retries += 1
                         await asyncio.sleep(2 ** retries)  # Exponential backoff for transient issues
                     else:
                         app_logger.error(f"MWS API unrecoverable error {response.status}: {await response.text()[:100]}...")
                         return None  # Do not retry on other 4xx errors (e.g., 400, 403)
+            except asyncio.TimeoutError as te:
+                app_logger.error(f"MWS API call timeout for model {model_name} after {self.settings.REQUEST_TIMEOUT}s (retry {retries+1}/{self.max_retries})")
+                retries += 1
+                await asyncio.sleep(2 ** retries)
             except Exception as e:
-                app_logger.error(f"MWS API call error: {e}")
+                app_logger.error(f"MWS API call error for model {model_name}: {str(e)} (retry {retries+1}/{self.max_retries})")
                 retries += 1
                 await asyncio.sleep(2 ** retries)
         app_logger.error(f"Max retries reached for MWS API call with model {model_name}")
