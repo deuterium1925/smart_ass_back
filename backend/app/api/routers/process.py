@@ -19,10 +19,21 @@ async def handle_process_message(
     Endpoint to process an incoming user message for a specific customer identified by phone_number.
     """
     try:
+        # Validate user_text is not empty or whitespace-only
+        if not payload.user_text or payload.user_text.strip() == "":
+            log_message_processing(payload.phone_number, "FAILED", "User input is empty or contains only whitespace.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User message cannot be empty or contain only whitespace."
+            )
+        
         log_message_processing(payload.phone_number, "STARTED", "Initiating message processing.")
         result = await process_user_message(payload)
         log_message_processing(payload.phone_number, "COMPLETED", "Message processing completed successfully.")
         return result
+    except HTTPException as he:
+        log_message_processing(payload.phone_number, "FAILED", f"Error during processing: {str(he.detail)}")
+        raise
     except Exception as e:
         log_message_processing(payload.phone_number, "FAILED", f"Error during processing: {str(e)}")
         app_logger.error(f"Error processing message for customer {payload.phone_number}: {e}")

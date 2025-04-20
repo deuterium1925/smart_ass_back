@@ -58,10 +58,10 @@ async def find_knowledge(text: str) -> AgentResponse:
 
         avg_relevance_score /= len(knowledge_chunks)
         context = "\n\n".join(knowledge_chunks)
-        # Truncate context to prevent LLM overload
-        if len(context) > 2000:
-            context = context[:2000] + "... (сокращено для обработки)"
-            app_logger.debug(f"Knowledge Agent: Context truncated to 2000 characters for query: {text[:50]}")
+        # Increased truncation limit to prevent losing critical info
+        if len(context) > 4000:
+            context = context[:4000] + "... (сокращено для обработки)"
+            app_logger.debug(f"Knowledge Agent: Context truncated to 4000 characters for query: {text[:50]}")
         
         # Generate a response using LLM based on retrieved context
         prompt = f"""

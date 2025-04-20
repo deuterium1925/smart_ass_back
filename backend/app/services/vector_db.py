@@ -184,9 +184,10 @@ class VectorDBService:
         app_logger.error(f"Max retries reached for embedding generation for text: {text[:30]}...")
         return None
 
-    def generate_point_id(self, query_text: str) -> str:
-        """Generate a unique ID for Qdrant points based on the hash of the query text."""
-        return hashlib.md5(query_text.encode('utf-8')).hexdigest()
+    def generate_point_id(self, query_text: str, content_text: str = "") -> str:
+        """Generate a unique ID for Qdrant points based on the hash of the query and content text."""
+        combined = query_text + content_text
+        return hashlib.md5(combined.encode('utf-8')).hexdigest()
 
     async def query_vector_db(self, query_text: str, top_k: int = 3) -> List[Dict]:
         """

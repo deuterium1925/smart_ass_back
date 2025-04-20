@@ -28,8 +28,8 @@ async def suggest_actions(
         knowledge_items = knowledge_response.result.get("knowledge", [])
         if knowledge_items:
             knowledge_content = knowledge_items[0].get("content", "")
-            if len(knowledge_content) > 500:  # Limit length to avoid overly long prompts
-                knowledge_content = knowledge_content[:500] + "..."
+            if len(knowledge_content) > 1000:  # Increased limit to avoid losing critical info
+                knowledge_content = knowledge_content[:1000] + "..."
         else:
             knowledge_content = "Информация из базы знаний отсутствует."
     else:

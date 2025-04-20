@@ -98,10 +98,6 @@ async def startup_event():
     """Initialize services on startup with smarter incremental indexing."""
     app_logger.info("Starting up Smart Assistant Backend...")
     await vector_db_service.ensure_collection()
-    # Temporarily clear collection for debugging
-    await asyncio.to_thread(vector_db_service.client.delete_collection, collection_name=vector_db_service.collection_name)
-    app_logger.info(f"Cleared collection {vector_db_service.collection_name} for re-indexing.")
-    await vector_db_service.ensure_collection()
 
     try:
         # Check and log status of all collections
@@ -155,7 +151,8 @@ async def startup_event():
         kb_hashes = {}
         for entry in KNOWLEDGE_BASE:
             query_text = entry.get("query", "Unknown Query")
-            point_id = vector_db_service.generate_point_id(query_text)
+            content_text = entry.get("correct_answer", "No content available.")
+            point_id = vector_db_service.generate_point_id(query_text, content_text)
             content_hash = compute_content_hash(entry)
             kb_hashes[point_id] = content_hash
             
@@ -189,7 +186,7 @@ async def startup_event():
                     query_text = entry.get("query", "Unknown Query")
                     correct_answer = entry.get("correct_answer", "No content available.")
                     correct_sources = entry.get("correct_sources", "")
-                    point_id = vector_db_service.generate_point_id(query_text)
+                    point_id = vector_db_service.generate_point_id(query_text, correct_answer)
                     content_hash = compute_content_hash(entry)
                     points.append(PointStruct(
                         id=point_id,

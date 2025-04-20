@@ -18,7 +18,7 @@ class LLMService:
         retries = 0
         while retries < self.max_retries:
             try:
-                app_logger.debug(f"Calling MWS model {model_name} with prompt: {prompt[:50]}...")
+                app_logger.debug(f"Calling MWS model {model_name} with prompt: {prompt[:50]}... (Attempt {retries+1}/{self.max_retries})")
                 async with aiohttp.ClientSession(timeout=self.timeout) as session:
                     response = await session.post(
                         url=self.settings.MWS_CHAT_COMPLETION_URL,
@@ -40,20 +40,24 @@ class LLMService:
                         app_logger.debug(f"Received successful response from MWS model {model_name}")
                         return data["choices"][0]["message"]["content"]
                     elif response.status == 429 or response.status >= 500:
-                        app_logger.warning(f"MWS API transient error {response.status} (retry {retries+1}/{self.max_retries}): {await response.text()[:100]}...")
+                        error_text = await response.text()
+                        truncated_text = error_text[:500] + "..." if len(error_text) > 500 else error_text
+                        app_logger.warning(f"MWS API transient error {response.status} (retry {retries+1}/{self.max_retries}): {truncated_text}")
                         retries += 1
-                        await asyncio.sleep(2 ** retries)  # Exponential backoff for transient issues
+                        await asyncio.sleep(5 * (2 ** retries))  # Longer backoff to handle rate limits
                     else:
-                        app_logger.error(f"MWS API unrecoverable error {response.status}: {await response.text()[:100]}...")
+                        error_text = await response.text()
+                        truncated_text = error_text[:500] + "..." if len(error_text) > 500 else error_text
+                        app_logger.error(f"MWS API unrecoverable error {response.status}: {truncated_text}")
                         return None  # Do not retry on other 4xx errors (e.g., 400, 403)
             except asyncio.TimeoutError as te:
                 app_logger.error(f"MWS API call timeout for model {model_name} after {self.settings.REQUEST_TIMEOUT}s (retry {retries+1}/{self.max_retries})")
                 retries += 1
-                await asyncio.sleep(2 ** retries)
+                await asyncio.sleep(5 * (2 ** retries))  # Longer backoff for timeouts
             except Exception as e:
                 app_logger.error(f"MWS API call error for model {model_name}: {str(e)} (retry {retries+1}/{self.max_retries})")
                 retries += 1
-                await asyncio.sleep(2 ** retries)
+                await asyncio.sleep(5 * (2 ** retries))  # Longer backoff for general errors
         app_logger.error(f"Max retries reached for MWS API call with model {model_name}")
         return None
 
