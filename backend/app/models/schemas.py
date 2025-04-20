@@ -45,7 +45,7 @@ class OperatorResponseInput(BaseModel):
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     user_text: str = Field(..., description="The user message to pair with the operator response.")
     operator_response: str = Field(..., description="The response from the operator for the current turn.")
-    timestamp: str = Field(..., description="Timestamp of the conversation turn to update.")
+    timestamp: str = Field(..., description="Timestamp of the conversation turn to update, in ISO 8601 format (UTC).")
 
 class CustomerCreateResponse(BaseModel):
     """Response model for customer profile creation or update operations."""
@@ -64,7 +64,7 @@ class HistoryEntry(BaseModel):
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number).")
     user_text: str = Field(default="", description="Text from the user.")
     operator_response: str = Field(default="", description="Response from the operator.")
-    timestamp: str = Field(default="", description="Timestamp of the conversation turn.")
+    timestamp: str = Field(default="", description="Timestamp of the conversation turn in ISO 8601 format (UTC).")
     role: str = Field(default="unknown", description="Role of the speaker (user/assistant/unknown).")
 
 class UserMessageInput(BaseModel):

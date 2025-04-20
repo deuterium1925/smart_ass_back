@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import datetime, timezone  # Added for UTC timestamp
 from typing import List
 from app.models.schemas import UserMessageInput, ProcessingResultOutput, AgentResponse, Suggestion
 from app.agents import (
@@ -60,7 +61,7 @@ async def process_user_message(payload: UserMessageInput) -> ProcessingResultOut
         app_logger.debug(f"Customer {phone_number} - Intent: {intent_result.result}, Emotion: {emotion_result.result}")
 
         # Store current user message in long-term memory without operator response initially
-        timestamp = str(int(time.time()))  # Simple timestamp for ordering conversation turns
+        timestamp = datetime.now(timezone.utc).isoformat()  # Use UTC ISO timestamp instead of time.time()
         success = await vector_db_service.store_conversation_turn(phone_number, user_text, "", timestamp)
         if not success:
             log_history_storage(phone_number, False, "Failed to store user message.")
