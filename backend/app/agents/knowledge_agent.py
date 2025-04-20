@@ -11,6 +11,7 @@ async def find_knowledge(text: str) -> AgentResponse:
     Retrieve relevant information from the vector database using similarity search, then generate a natural
     language response with an LLM. Optimizes output length for use by downstream agents like action_agent.
     Returns an AgentResponse with knowledge content and confidence score for operator support.
+    Prioritizes relevant content over arbitrary truncation to avoid losing critical information.
     """
     settings = get_settings()
     try:
@@ -59,10 +60,15 @@ async def find_knowledge(text: str) -> AgentResponse:
 
         avg_relevance_score /= len(knowledge_chunks)
         context = "\n\n".join(knowledge_chunks)
-        # Truncate context to prevent token overflow in downstream processing
-        if len(context) > 800:
-            context = context[:800] + "... (сокращено для обработки)"
-            app_logger.debug(f"Knowledge Agent: Context truncated to 800 characters for query: {text[:50]}")
+        # Increase truncation limit to retain more information, warn if truncated
+        truncation_limit = 2000  # Increased from 800 to balance token limits and information retention
+        truncation_occurred = False
+        if len(context) > truncation_limit:
+            context = context[:truncation_limit] + "... (сокращено для обработки, часть информации может быть утеряна)"
+            truncation_occurred = True
+            app_logger.warning(f"Knowledge Agent: Context truncated to {truncation_limit} characters for query: {text[:50]}")
+        else:
+            app_logger.debug(f"Knowledge Agent: Context length within limit ({len(context)} characters) for query: {text[:50]}")
         
         # Generate a concise response using LLM based on retrieved context
         prompt = f"""
@@ -70,6 +76,7 @@ async def find_knowledge(text: str) -> AgentResponse:
         Ваша задача - сформулировать точный, полезный и естественный ответ на основе предоставленной информации из базы знаний.
         Используйте только релевантные данные из контекста. Если информация недостаточна, укажите это.
         Ответ должен быть на русском языке, кратким (не более 200 слов) и ориентированным на помощь клиенту.
+        Если контекст был сокращен, добавьте предупреждение, что информация может быть неполной.
         
         Запрос клиента: {text}
         Контекст из базы знаний:
@@ -107,10 +114,17 @@ async def find_knowledge(text: str) -> AgentResponse:
                 error="LLM response generation failed, using fallback content."
             )
 
-        # Truncate generated response to ensure compatibility with downstream agents
-        if len(generated_response) > 800:
-            generated_response = generated_response[:800] + "... (сокращено)"
-            app_logger.debug(f"Knowledge Agent: Generated response truncated to 800 characters for query: {text[:50]}")
+        # Increase truncation limit for generated response and warn if truncated
+        if len(generated_response) > truncation_limit:
+            generated_response = generated_response[:truncation_limit] + "... (сокращено, информация может быть неполной)"
+            app_logger.warning(f"Knowledge Agent: Generated response truncated to {truncation_limit} characters for query: {text[:50]}")
+            truncation_occurred = True
+        else:
+            app_logger.debug(f"Knowledge Agent: Generated response length within limit ({len(generated_response)} characters) for query: {text[:50]}")
+
+        # Append a truncation warning to the response if truncation occurred at any stage
+        if truncation_occurred:
+            generated_response += "\n\nВнимание: Часть информации была сокращена из-за ограничений длины. Для полного ответа уточните детали запроса."
 
         knowledge_result = KnowledgeResult(
             document_id="generated_response",

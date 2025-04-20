@@ -17,13 +17,27 @@ async def create_customer(
 ):
     """
     Endpoint to create or update a customer profile in the Qdrant customers collection.
-    Updates existing profiles if the phone number matches.
+    Updates existing profiles if the phone number matches, with checks for data consistency.
     """
     try:
-        # Log operation type based on whether customer exists
+        # Check for existing customer profile
         existing_customer = await vector_db_service.retrieve_customer(customer_data.phone_number)
         operation_type = "Updating" if existing_customer else "Creating"
         app_logger.info(f"{operation_type} customer profile for {customer_data.phone_number}")
+
+        # If customer exists, log differences for critical fields to detect potential conflicts
+        if existing_customer:
+            differences = []
+            critical_fields = ["is_mts_subscriber", "tariff_plan", "has_mts_premium", "has_mobile", "has_home_internet", "has_home_tv"]
+            for field in critical_fields:
+                existing_value = getattr(existing_customer, field)
+                new_value = getattr(customer_data, field)
+                if existing_value != new_value:
+                    differences.append(f"{field}: old={existing_value}, new={new_value}")
+            if differences:
+                app_logger.warning(f"Data consistency warning for {customer_data.phone_number}: Differences detected - {'; '.join(differences)}")
+            else:
+                app_logger.debug(f"No significant differences detected for existing customer {customer_data.phone_number}")
 
         # Upsert customer data to Qdrant
         success = await vector_db_service.upsert_customer(customer_data)
