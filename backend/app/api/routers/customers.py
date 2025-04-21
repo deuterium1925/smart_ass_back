@@ -242,14 +242,19 @@ async def list_customers(
         
         for point in customers_data:
             customer_payload = point.payload
-            customer_entry = {"customer": Customer(**customer_payload)}
-            if include_history:
-                history = await vector_db_service.retrieve_conversation_history(
-                    phone_number=customer_payload.get("phone_number", ""),
-                    limit=50  # Limit history per customer to avoid overload
-                )
-                customer_entry["history"] = history
-            customers.append(customer_entry)
+            try:
+                customer_obj = Customer(**customer_payload)
+                customer_entry = {"customer": customer_obj}
+                if include_history:
+                    history = await vector_db_service.retrieve_conversation_history(
+                        phone_number=customer_payload.get("phone_number", ""),
+                        limit=50  # Limit history per customer to avoid overload
+                    )
+                    customer_entry["history"] = history
+                customers.append(customer_entry)
+            except ValueError as ve:
+                app_logger.warning(f"Skipping customer with invalid data: {customer_payload.get('phone_number', 'unknown')} - {str(ve)}")
+                continue
         
         app_logger.info(f"Retrieved {len(customers)} customers out of {total_count} total (offset: {offset or 'start'})")
         return {
