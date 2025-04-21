@@ -1,0 +1,101 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+# -*- Waf constitued (pre-5.0) -*-
+.wafpickle-*
+.wafsideload/
+# -*- Waf constitued (5.0+) -*-
+.waf-lock*
+# -*- Windows related -*-
+*.pdb
+*.lib
+*.exp
+# -*- Mac related -*-
+*.dylib
+
+# Pyenv
+.python-version
+
+# Mypy cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytype
+.pytype/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE / Editor specific
+.idea/
+.vscode/
+*.swp
+*~
+*.bak
+
+# Docker files
+docker-compose.yml.override
+
+# Log files
+logs/
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Secrets - !! Ensure .env is listed !!
+.env
+secrets/
+
+# Test results / coverage
+htmlcov/
+.coverage
+.pytest_cache/

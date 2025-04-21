@@ -1,0 +1,6 @@
+# Secrets - !! Ensure .env is listed !!
+.env
+
+# Nix devShell stuff
+.direnv/
+/.pre-commit-config.yaml

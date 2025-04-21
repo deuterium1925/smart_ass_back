@@ -1,0 +1,50 @@
+volumes:
+  qdrant_data:
+  caddy_data:
+
+networks:
+  project:
+    driver: bridge
+
+configs:
+  qdrant_config:
+    content: |
+      log_level: INFO
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: always
+    configs:
+      - source: qdrant_config
+        target: /qdrant/config/production.yaml
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - project
+
+  backend:
+    build: backend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - qdrant
+    networks:
+      - project
+
+  frontend:
+    build: frontend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      - backend
+    volumes:
+      - caddy_data:/data
+    networks:
+      - project
