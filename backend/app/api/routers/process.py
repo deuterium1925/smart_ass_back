@@ -204,13 +204,33 @@ async def analyze_conversation_request(
     """,
     status_code=status.HTTP_200_OK,
 )
+@router.post(
+    "/submit_operator_response",
+    response_model=dict,
+    summary="Submit Operator Response and Trigger Automated Agents",
+    description="""
+    Submits the operator's response for the most recent unanswered user message, updates conversation history, 
+    and triggers Summary Agent to provide feedback based on the operator's response. 
+    Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
+    If a specific `timestamp` is provided, updates that conversation turn; otherwise, auto-selects the most recent unanswered turn.
+    If no unanswered turns exist, creates a new turn for follow-up communication.
+    If the customer is the active conversation, allows for updating history accordingly.
+    
+    **Frontend Integration Notes**:
+    - Optionally provide `timestamp` (from `/process` or `/history`) to target a specific conversation turn. If omitted, the system selects the most recent unanswered message or creates a new turn.
+    - If no unanswered messages exist or the targeted turn already has a response, a new turn is created for follow-up communication.
+    - Ensure `phone_number` matches the customer profile and is in format `89XXXXXXXXX` (11 digits starting with 89) to avoid orphaned data or validation errors.
+    - After submission, Summary results will be available in the response for immediate display. Update any placeholders or loading states with these results.
+    """,
+    status_code=status.HTTP_200_OK,
+)
 async def submit_operator_response(
     payload: OperatorResponseInput = Body(...)
 ):
     """
-    Endpoint to update a conversation turn with the operator's response in history and trigger QA and Summary Agents.
+    Endpoint to update a conversation turn with the operator's response in history and trigger Summary Agent.
     Uses provided timestamp or auto-identifies the most recent unanswered user message using phone_number.
-    Creates a new turn if no unanswered messages exist and no timestamp is provided or if the specified turn already has a response.
+    Creates a new turn if no unanswered messages exist or if the specified turn already has a response.
     Rejects operation if no customer profile exists or phone number is invalid.
     Checks if the customer is the active conversation.
     """
@@ -242,7 +262,7 @@ async def submit_operator_response(
         if timestamp:
             # If timestamp is provided, find the specific turn
             for entry in history_data:
-                if entry["timestamp"] == timestamp:
+                if entry["timestamp"] == timestamp and entry["role"] == "user":
                     selected_turn = entry
                     break
             if not selected_turn:
@@ -253,8 +273,8 @@ async def submit_operator_response(
                 )
             timestamp = selected_turn["timestamp"]
             user_text = selected_turn["user_text"]
-            # If the turn already has a response, we'll create a new follow-up turn
-            if selected_turn["operator_response"].strip():
+            # If the turn already has a response (i.e., a corresponding assistant turn with the same timestamp exists), create a new follow-up turn
+            if any(entry["timestamp"] == timestamp and entry["role"] == "assistant" for entry in history_data):
                 app_logger.info(f"Turn at timestamp {timestamp} for {payload.phone_number} already has a response. Creating new follow-up turn.")
                 from datetime import datetime, timezone
                 timestamp = datetime.now(timezone.utc).isoformat()
@@ -324,7 +344,7 @@ async def submit_operator_response(
                     )
                 log_history_storage(payload.phone_number, True, "Follow-up turn stored successfully.")
 
-        # Trigger automated agents (QA and Summary) after operator response
+        # Trigger automated agents (Summary) after operator response
         automated_result = await process_automated_agents(
             phone_number=payload.phone_number,
             timestamp=timestamp,
@@ -335,7 +355,7 @@ async def submit_operator_response(
         # Check for remaining unanswered messages and update queue if none exist
         async with queue_lock:
             history_data = await vector_db_service.retrieve_conversation_history(payload.phone_number, limit=50)
-            has_unanswered = any(entry["user_text"].strip() and not entry["operator_response"].strip() for entry in history_data)
+            has_unanswered = any(entry["user_text"].strip() and not any(e["timestamp"] == entry["timestamp"] and e["role"] == "assistant" for e in history_data) for entry in history_data if entry["role"] == "user")
             if not has_unanswered and payload.phone_number in customer_queue:
                 customer_queue.remove(payload.phone_number)
                 app_logger.info(f"Removed customer {payload.phone_number} from queue as no unanswered messages remain. Queue length: {len(customer_queue)}")

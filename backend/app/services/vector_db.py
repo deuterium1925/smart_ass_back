@@ -368,11 +368,21 @@ class VectorDBService:
             return False
 
     async def retrieve_conversation_history(self, phone_number: str, limit: int = 10) -> List[Dict]:
+        """
+        Retrieve conversation history for a customer by phone_number, limited to recent turns.
+        Validates customer existence and uses indexed field for performance. Sorts by timestamp for chronological order.
+        Returns an empty list if no customer profile exists.
+        Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
+        Optimized to avoid retrieving unnecessary vector data.
+        Assigns sequence numbers for frontend ordering.
+        Splits turns into separate user and assistant entries.
+        """
         if not phone_number:
             app_logger.error("No phone number provided for retrieving conversation history")
             return []
 
         try:
+            # Validate customer existence before retrieval
             customer = await self.retrieve_customer(phone_number)
             if not customer:
                 app_logger.error(f"Cannot retrieve history: No customer found with phone number {phone_number}")
@@ -385,7 +395,7 @@ class VectorDBService:
                 scroll_filter={"must": [{"key": "phone_number", "match": {"value": phone_number}}]},
                 limit=limit,
                 with_payload=True,
-                with_vectors=False
+                with_vectors=False  # Optimization: Avoid retrieving vectors as they are not needed for history display
             )
             history = []
             for point in search_result[0]:
