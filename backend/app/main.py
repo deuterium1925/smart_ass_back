@@ -5,7 +5,7 @@ from app.core.config import get_settings
 from app.services.vector_db import vector_db_service
 from app.utils.logger import app_logger
 from app.data.knowledge_base import KNOWLEDGE_BASE
-from qdrant_client.http.models import PointStruct
+from qdrant_client.http.models import PointStruct, VectorParams, Distance
 import asyncio
 import hashlib
 from typing import List, Dict, Tuple, Optional
@@ -127,46 +127,37 @@ async def upsert_batch_to_qdrant(points: List[PointStruct], batch_size: int = 20
         return False
 
 
-async def get_existing_points() -> Dict[str, Dict]:
-    """Retrieve existing points from Qdrant to compare with current knowledge base entries for incremental indexing."""
-    try:
-        existing_points = {}
-        offset = None
-        batch_size = 1000
-        while True:
-            result = await asyncio.to_thread(
-                vector_db_service.client.scroll,
-                collection_name=vector_db_service.collection_name,
-                limit=batch_size,
-                offset=offset,
-                with_payload=True,
-                with_vectors=False  # Optimization: Avoid retrieving vectors as they are not needed for comparison
-            )
-            points, next_offset = result
-            for point in points:
-                existing_points[point.id] = {
-                    "content_hash": point.payload.get("content_hash", ""),
-                    "query": point.payload.get("query", "Unknown")
-                }
-            if not next_offset:
-                break
-            offset = next_offset
-        app_logger.info(f"Retrieved {len(existing_points)} existing points from Qdrant for comparison.")
-        return existing_points
-    except Exception as e:
-        app_logger.error(f"Failed to retrieve existing points from Qdrant: {str(e)}")
-        return {}
-
-
-async def initialize_vector_db() -> bool:
+async def initialize_vector_db(recreate_knowledge_collection: bool = True) -> bool:
     """
     Initialize vector database collections with error handling.
+    Optionally recreates the knowledge base collection at startup to ensure a clean slate.
     Returns True if successful, False otherwise.
     """
     try:
         app_logger.info("Initializing vector database collections...")
         await vector_db_service.ensure_collection()
         
+        # Recreate the knowledge base collection if configured to do so
+        if recreate_knowledge_collection:
+            app_logger.info(f"Recreating knowledge base collection {vector_db_service.collection_name} for clean slate...")
+            try:
+                await asyncio.to_thread(
+                    vector_db_service.client.delete_collection,
+                    collection_name=vector_db_service.collection_name
+                )
+                app_logger.info(f"Deleted existing collection {vector_db_service.collection_name}.")
+            except Exception as e:
+                app_logger.warning(f"Could not delete existing collection {vector_db_service.collection_name}: {str(e)}. Proceeding to recreate.")
+            
+            # Recreate the collection with the correct vector size
+            vector_size = vector_db_service.vector_size if vector_db_service.vector_size else 1024
+            await asyncio.to_thread(
+                vector_db_service.client.create_collection,
+                collection_name=vector_db_service.collection_name,
+                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
+            )
+            app_logger.info(f"Recreated collection {vector_db_service.collection_name} with vector size {vector_size}.")
+
         # Log status of collections for diagnostic purposes
         collection_info_knowledge = await asyncio.to_thread(
             vector_db_service.client.get_collection,
@@ -227,22 +218,21 @@ async def check_critical_entries(collection_name: str, critical_keyword: str = "
         return False
 
 
-async def index_knowledge_base(force_reindex: bool = False) -> bool:
+async def index_knowledge_base() -> bool:
     """
-    Perform incremental indexing of the knowledge base with optional forced reindexing.
+    Perform full indexing of the knowledge base since the collection is recreated at startup.
     Returns True if indexing is successful or partially successful, False on critical failure.
-    Ensures critical entries are always indexed and adds detailed debugging for mismatches.
-    Logs outdated points for review and potential future cleanup.
+    Ensures critical entries are indexed and adds detailed debugging for mismatches.
     """
     try:
-        app_logger.info(f"Starting knowledge base indexing (force_reindex={force_reindex})...")
+        app_logger.info("Starting knowledge base indexing...")
         collection_info = await asyncio.to_thread(
             vector_db_service.client.get_collection,
             collection_name=vector_db_service.collection_name
         )
         app_logger.info(f"Collection {vector_db_service.collection_name} status: {collection_info.points_count} points")
 
-        app_logger.info(f"Loaded {len(KNOWLEDGE_BASE)} knowledge base entries for indexing.")
+        app_logger.info(f"Loaded {len(KNOWLEDGE_BASE)} knowledge base entries for full indexing.")
         # Log specific entries related to 'кион' for debugging purposes
         critical_keyword = "кион"
         kion_entries = [entry for entry in KNOWLEDGE_BASE if critical_keyword in entry.get("query", "").lower() or "kion" in entry.get("query", "").lower()]
@@ -250,59 +240,21 @@ async def index_knowledge_base(force_reindex: bool = False) -> bool:
         for i, entry in enumerate(kion_entries):
             app_logger.info(f"Kion Entry {i+1}: Query='{entry['query']}', Content Preview='{entry['correct_answer'][:100]}...'")
 
-        # Check for critical entries before deciding on reindexing
-        critical_found = await check_critical_entries(vector_db_service.collection_name, critical_keyword)
-        if not critical_found and force_reindex:
-            app_logger.warning(f"Critical entries for '{critical_keyword}' missing. Forcing reindexing of knowledge base.")
-            await asyncio.to_thread(
-                vector_db_service.client.delete_collection,
-                collection_name=vector_db_service.collection_name
-            )
-            await asyncio.to_thread(
-                vector_db_service.client.create_collection,
-                collection_name=vector_db_service.collection_name,
-                vectors_config={
-                    "size": vector_db_service.vector_size if vector_db_service.vector_size else 1024,
-                    "distance": "Cosine"
-                }
-            )
-            app_logger.info(f"Recreated collection {vector_db_service.collection_name} for forced reindexing.")
+        # Since collection is recreated, index all entries
+        to_index = KNOWLEDGE_BASE
+        app_logger.info(f"Full indexing: {len(to_index)} items to index (collection recreated at startup).")
 
-        # Implement incremental indexing to update only new or changed entries
-        existing_points = await get_existing_points()
-        to_index = []
-        kb_hashes = {}
-        for entry in KNOWLEDGE_BASE:
-            query_text = entry.get("query", "Unknown Query")
-            content_text = entry.get("correct_answer", "No content available.")
-            point_id = vector_db_service.generate_point_id(query_text, content_text)
-            content_hash = compute_content_hash(entry)
-            kb_hashes[point_id] = content_hash
-            
-            # Add to index list if new, updated, critical (e.g., 'кион' related), or if forced reindexing
-            if point_id not in existing_points or force_reindex or critical_keyword in query_text.lower() or "kion" in query_text.lower():
-                app_logger.debug(f"Indexing item (new or critical): {query_text[:30]}... (ID: {point_id})")
-                to_index.append(entry)
-            elif existing_points.get(point_id, {}).get("content_hash", "") != content_hash:
-                app_logger.debug(f"Updated item detected: {query_text[:30]}... (ID: {point_id})")
-                to_index.append(entry)
-            else:
-                app_logger.debug(f"Item unchanged: {query_text[:30]}... (ID: {point_id})")
-
-        # Log summary of incremental indexing needs
-        app_logger.info(f"Incremental indexing: {len(to_index)} items to index ({len(KNOWLEDGE_BASE) - len(to_index)} unchanged).")
-
-        # Generate embeddings only for new or updated entries to save resources
+        # Generate embeddings for all entries
         if to_index:
             successful_indices = 0
             failed_indices = 0
-            app_logger.info(f"Generating embeddings for {len(to_index)} new or updated entries in parallel batches...")
+            app_logger.info(f"Generating embeddings for {len(to_index)} entries in parallel batches...")
             results = await generate_embeddings_batch(to_index, batch_size=50, max_concurrent_batches=5)
             successful_indices = len(results)
             failed_indices = len(to_index) - successful_indices
             app_logger.info(f"Embeddings generated: {successful_indices} successful, {failed_indices} failed.")
 
-            # Prepare points for upserting with content hash for future comparison
+            # Prepare points for upserting with content hash for future comparison (if incremental indexing is re-enabled)
             points = []
             kion_points = []
             for entry, embedding in results:
@@ -319,7 +271,7 @@ async def index_knowledge_base(force_reindex: bool = False) -> bool:
                             "query": query_text,
                             "text": correct_answer,
                             "sources": correct_sources,
-                            "content_hash": content_hash  # Store hash for future comparisons
+                            "content_hash": content_hash  # Store hash for future comparisons if needed
                         }
                     )
                     points.append(point)
@@ -331,59 +283,33 @@ async def index_knowledge_base(force_reindex: bool = False) -> bool:
                     failed_indices += 1
                     successful_indices -= 1
 
-            # Upsert new or updated points to Qdrant in batches
+            # Upsert all points to Qdrant in batches
             if points:
                 app_logger.info(f"Upserting {len(points)} points to Qdrant in batches, including {len(kion_points)} critical '{critical_keyword}' entries...")
                 if await upsert_batch_to_qdrant(points, batch_size=200):
-                    app_logger.info(f"Incremental indexing completed: {successful_indices} entries indexed, {failed_indices} entries skipped due to errors.")
+                    app_logger.info(f"Full indexing completed: {successful_indices} entries indexed, {failed_indices} entries skipped due to errors.")
                 else:
                     app_logger.error("Failed to upsert points to Qdrant. Indexing incomplete.")
                     return False
             else:
-                app_logger.warning("No new or updated points to upsert to Qdrant.")
+                app_logger.warning("No points to upsert to Qdrant after embedding generation.")
         else:
-            app_logger.info("No new or updated items to index. Skipping embedding and upsert steps.")
-
-        # Log outdated points but do not delete them to prevent potential data loss
-        # Instead, collect them for review or potential future cleanup
-        outdated_points = []
-        for point_id in existing_points:
-            if point_id not in kb_hashes:
-                outdated_points.append({
-                    "id": point_id,
-                    "query": existing_points[point_id]['query'],
-                })
-                app_logger.warning(f"Item no longer in knowledge base, but NOT deleting to avoid data loss: {existing_points[point_id]['query'][:30]}... (ID: {point_id})")
-        if outdated_points:
-            app_logger.info(f"Found {len(outdated_points)} potentially outdated points in Qdrant, but skipping deletion for safety.")
-            # Log a summary of outdated points for review (could be written to a file or database for future cleanup)
-            app_logger.info(f"Outdated points summary logged for review. Consider manual cleanup or backup if needed.")
-            # Optionally, save outdated points IDs to a file for administrative review
-            try:
-                import json
-                from datetime import datetime
-                outdated_log_file = f"outdated_points_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                with open(outdated_log_file, 'w', encoding='utf-8') as f:
-                    json.dump(outdated_points, f, ensure_ascii=False, indent=2)
-                app_logger.info(f"Outdated points details saved to {outdated_log_file} for review.")
-            except Exception as e:
-                app_logger.warning(f"Could not save outdated points to file: {str(e)}")
-        else:
-            app_logger.info("No potentially outdated points found in Qdrant.")
+            app_logger.info("No items to index. Knowledge base is empty.")
 
         # Final check post-indexing for critical entries with broader search to ensure data integrity
         critical_found_post = await check_critical_entries(vector_db_service.collection_name, critical_keyword)
         if not critical_found_post:
-            app_logger.warning(f"Post-indexing check: No '{critical_keyword}/KION' related entries found in Qdrant even after reindexing. Check embedding generation, storage logic, or Qdrant data. API will still start.")
+            app_logger.warning(f"Post-indexing check: No '{critical_keyword}/KION' related entries found in Qdrant even after full reindexing. Check embedding generation, storage logic, or Qdrant data. API will still start.")
             app_logger.warning("Continuing startup despite missing critical entries to avoid blocking API.")
             return True
 
         app_logger.info(f"Knowledge base indexing successful with critical '{critical_keyword}' entries confirmed.")
         return True
     except Exception as e:
-        app_logger.error(f"Failed to perform incremental indexing of knowledge base: {str(e)}")
+        app_logger.error(f"Failed to perform full indexing of knowledge base: {str(e)}")
         app_logger.warning("Continuing startup despite indexing failure to avoid blocking API.")
-        return True  # Changed to True to avoid blocking startup on indexing errors
+        return True  # Continue startup to avoid blocking API
+
 
 async def cleanup_orphaned_history() -> bool:
     """
@@ -406,17 +332,19 @@ async def startup_event():
     Initialize essential application services on startup with modularized operations.
     Handles vector database setup, knowledge base indexing, and data cleanup with robust error handling.
     Ensures partial initialization does not prevent API from starting unless critical failures occur.
+    Recreates the knowledge base collection at startup for a clean slate.
     """
     app_logger.info("Starting up Smart Assistant Backend...")
     startup_success = True
 
     # Step 1: Initialize vector database collections (critical)
-    if not await initialize_vector_db():
+    # Set recreate_knowledge_collection=True to ensure a clean slate for knowledge base
+    if not await initialize_vector_db(recreate_knowledge_collection=True):
         app_logger.error("Critical failure: Vector database initialization failed. API may not function correctly.")
         startup_success = False
 
     # Step 2: Index knowledge base (non-critical, can retry later if fails)
-    if startup_success and not await index_knowledge_base(force_reindex=False):
+    if startup_success and not await index_knowledge_base():
         app_logger.warning("Knowledge base indexing failed. API can still operate with existing data.")
         startup_success = False
 
