@@ -278,7 +278,7 @@ class VectorDBService:
                 app_logger.error(f"Failed to generate embedding for turn for customer {phone_number}")
                 return None
 
-            point_id = hashlib.md5(f"{phone_number}_{timestamp}_{user_text}".encode('utf-8')).hexdigest()
+            point_id = hashlib.md5(f"{phone_number}_{timestamp}_{user_text}_{operator_response}".encode('utf-8')).hexdigest()
             point = PointStruct(
                 id=point_id,
                 vector=embedding,
@@ -464,7 +464,9 @@ class VectorDBService:
         try:
             history = await self.retrieve_conversation_history(phone_number, limit)
             for entry in reversed(history):
-                if entry["user_text"].strip() and not entry["operator_response"].strip():
+                if entry["role"] == "user" and entry["user_text"].strip() and not any(
+                    e["timestamp"] == entry["timestamp"] and e["role"] == "assistant" for e in history
+                ):
                     app_logger.info(f"Found latest unanswered turn for customer {phone_number} at timestamp {entry['timestamp']}")
                     return entry
             app_logger.info(f"No unanswered turns found for customer {phone_number}")
