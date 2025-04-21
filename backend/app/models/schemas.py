@@ -75,6 +75,7 @@ class HistoryEntry(BaseModel):
     operator_response: str = Field(default="", description="Response from the operator for this conversation turn.")
     timestamp: str = Field(default="", description="Timestamp of the conversation turn in ISO 8601 format (UTC).")
     role: str = Field(default="unknown", description="Role of the speaker (user/assistant/unknown).")
+    sequence_number: int = Field(default=0, description="Sequential number for ordering conversation history.")
 
 class UserMessageInput(BaseModel):
     """Input model for processing a user's message in the contact center system."""

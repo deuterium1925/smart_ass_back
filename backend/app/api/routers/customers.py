@@ -29,6 +29,7 @@ async def create_customer(
     Endpoint to create or update a customer profile in the Qdrant customers collection.
     Updates existing profiles if the phone number matches, with checks for data consistency.
     Phone number is validated and normalized to format 89XXXXXXXXX.
+    If a profile already exists, deletes old history to prevent data leakage for reassigned numbers.
     """
     try:
         # Check for existing customer profile
@@ -49,6 +50,9 @@ async def create_customer(
                 app_logger.warning(f"Data consistency warning for {customer_data.phone_number}: Differences detected - {'; '.join(differences)}")
             else:
                 app_logger.debug(f"No significant differences detected for existing customer {customer_data.phone_number}")
+            # Delete old history to prevent data leakage for reassigned numbers
+            app_logger.info(f"Deleting old history for {customer_data.phone_number} before updating profile to handle potential reassignment.")
+            await vector_db_service.delete_customer_and_history(customer_data.phone_number)
 
         # Upsert customer data to Qdrant
         success = await vector_db_service.upsert_customer(customer_data)
@@ -100,7 +104,7 @@ async def retrieve_customer(phone_number: str):
     Returns null if no profile exists. Validates phone number format before processing.
     """
     try:
-        # Normalize and validate phone number
+        # Normalize and validate phone number using the same logic as Pydantic validator
         cleaned_phone = ''.join(filter(str.isdigit, phone_number))
         if len(cleaned_phone) != 11 or not cleaned_phone.startswith('89'):
             log_customer_retrieval(phone_number, False)

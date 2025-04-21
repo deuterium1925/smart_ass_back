@@ -16,6 +16,7 @@ async def process_automated_agents(phone_number: str, timestamp: str, user_text:
     Run automated agents (QA and Summary) after an operator submits a response or manually triggered.
     Returns results of automated agents for inclusion in the response.
     Takes both user_text and operator_response to ensure contextual relevance.
+    QA Agent runs only if operator_response is provided; otherwise, a placeholder is returned.
     """
     app_logger.info(f"Orchestrator: Running automated agents for customer {phone_number}, timestamp {timestamp}")
     settings = get_settings()
@@ -37,11 +38,19 @@ async def process_automated_agents(phone_number: str, timestamp: str, user_text:
             app_logger.debug(f"Retrieved history for automated agents for customer {phone_number}: {len(history)} turns")
             log_history_retrieval(phone_number, len(history))
 
-            # Run automated agents concurrently with context of user text and operator response
+            # Run Summary Agent always, but QA Agent only if operator_response is non-empty
             summary_task = asyncio.create_task(summary_agent.summarize_conversation(history, user_text))
-            qa_task = asyncio.create_task(qa_agent.check_quality(user_text, operator_response))
-
-            summary_result, qa_result = await asyncio.gather(summary_task, qa_task, return_exceptions=True)
+            qa_result = None
+            if operator_response.strip():
+                qa_task = asyncio.create_task(qa_agent.check_quality(user_text, operator_response))
+                summary_result, qa_result = await asyncio.gather(summary_task, qa_task, return_exceptions=True)
+            else:
+                summary_result = await summary_task
+                qa_result = AgentResponse(
+                    agent_name="QAAgent",
+                    result={"feedback": "QA feedback will be generated after operator response."},
+                    confidence=0.0
+                )
 
             if isinstance(summary_result, Exception):
                 app_logger.error(f"Summary Agent failed for customer {phone_number} at timestamp {timestamp}: {str(summary_result)}")

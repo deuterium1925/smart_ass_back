@@ -196,8 +196,8 @@ async def submit_operator_response(
         if not success:
             log_history_storage(payload.phone_number, False, "Failed to update conversation turn with operator response.")
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to update conversation turn for customer {payload.phone_number} at timestamp {payload.timestamp}."
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Conversation turn not found for customer {payload.phone_number} at timestamp {payload.timestamp}."
             )
         log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
 
@@ -210,7 +210,10 @@ async def submit_operator_response(
                 break
         if not user_text:
             app_logger.warning(f"Could not find user text for timestamp {payload.timestamp} for customer {payload.phone_number}")
-            user_text = "Unknown user message"
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User message not found for timestamp {payload.timestamp} for customer {payload.phone_number}."
+            )
 
         automated_result = await process_automated_agents(
             phone_number=payload.phone_number,
@@ -311,7 +314,7 @@ async def trigger_automated_agents(phone_number: str, timestamp: str):
             log_message_processing(cleaned_phone, "FAILED", f"Conversation turn not found for timestamp {timestamp}.")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Conversation turn not found for timestamp {timestamp} for customer {cleaned_phone}."
+                detail=f"Conversation turn not found for timestamp {timestamp} for customer {cleaned_phone}. Suggestion: Fetch recent conversation history via /analyze to get the correct timestamp."
             )
 
         # Trigger automated agents (QA and Summary)

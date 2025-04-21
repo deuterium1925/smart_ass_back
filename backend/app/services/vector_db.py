@@ -61,7 +61,7 @@ class VectorDBService:
                     self.vector_size = collection_info.config.params.vectors.size
                     app_logger.info(f"Retrieved vector size from existing collection: {self.vector_size}")
 
-            # Handle conversation history collection with index for efficient lookups by phone_number
+            # Handle conversation history collection with index for efficient lookups by phone_number and timestamp
             if self.history_collection_name not in collection_names:
                 await asyncio.to_thread(
                     self.client.create_collection,
@@ -74,10 +74,16 @@ class VectorDBService:
                     field_name="phone_number",
                     field_type="keyword"
                 )
-                app_logger.info(f"Created collection {self.history_collection_name} with index on phone_number")
+                await asyncio.to_thread(
+                    self.client.create_payload_index,
+                    collection_name=self.history_collection_name,
+                    field_name="timestamp",
+                    field_type="keyword"
+                )
+                app_logger.info(f"Created collection {self.history_collection_name} with indexes on phone_number and timestamp")
             else:
                 app_logger.debug(f"Collection {self.history_collection_name} already exists")
-                # Ensure index exists for performance optimization
+                # Ensure indexes exist for performance optimization
                 indexes = await asyncio.to_thread(
                     self.client.get_collection,
                     collection_name=self.history_collection_name
@@ -90,6 +96,15 @@ class VectorDBService:
                         field_type="keyword"
                     )
                     app_logger.info(f"Added index on phone_number for {self.history_collection_name}")
+                if not any(index.field_name == "timestamp" for index in indexes.payload_schema.values()):
+                    await asyncio.to_thread(
+                        self.client.create_payload_index,
+                        collection_name=self.history_collection_name,
+                        field_name="timestamp",
+                        field_type="keyword"
+                    )
+                    app_logger.info(f"Added index on timestamp for {self.history_collection_name}")
+
 
             # Handle customers collection with index for fast retrieval by phone_number
             if self.customers_collection_name not in collection_names:
@@ -303,7 +318,7 @@ class VectorDBService:
                 },
                 limit=1,
                 with_payload=True,
-                with_vectors=True
+                with_vectors=False  # Changed to False since vector is not used; new embedding will be generated
             )
             if not search_result[0]:
                 app_logger.error(f"No conversation turn found for customer {phone_number} at timestamp {timestamp}")
@@ -346,6 +361,7 @@ class VectorDBService:
         Returns an empty list if no customer profile exists.
         Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
         Optimized to avoid retrieving unnecessary vector data.
+        Assigns sequence numbers for frontend ordering.
         """
         if not phone_number:
             app_logger.error("No phone number provided for retrieving conversation history")
@@ -378,7 +394,8 @@ class VectorDBService:
                         "assistant" if point.payload.get("operator_response", "").strip()
                         else "user" if point.payload.get("user_text", "").strip()
                         else "unknown"
-                    )
+                    ),
+                    "sequence_number": 0  # Placeholder, will be updated below
                 }
                 for point in search_result[0]
             ]
@@ -391,7 +408,11 @@ class VectorDBService:
                 elif user_text_present and operator_resp_present and entry["role"] == "assistant":
                     app_logger.debug(f"Both fields present for history entry for customer {phone_number}: Assigned role={entry['role']} prioritizing operator_response")
 
+            # Sort by timestamp and assign sequence numbers for frontend ordering
             history.sort(key=lambda x: x.get("timestamp", "0"), reverse=False)
+            for index, entry in enumerate(history):
+                entry["sequence_number"] = index + 1
+
             app_logger.info(f"Retrieved {len(history)} conversation turns for customer {phone_number}")
             return history
         except Exception as e:
@@ -523,9 +544,10 @@ class VectorDBService:
         """
         Delete a customer profile and all associated conversation history to maintain data consistency.
         Ensures that no history remains if a customer profile is deleted.
-        Returns True if successful, False otherwise.
+        Returns True if both customer and history are successfully deleted, False otherwise.
         Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
         Optimized to retrieve minimal data during deletion.
+        Handles partial failures by tracking success of each deletion step.
         """
         if not phone_number:
             app_logger.error("No phone number provided for deleting customer and history")
@@ -537,6 +559,9 @@ class VectorDBService:
             if not customer:
                 app_logger.info(f"No customer found with phone number {phone_number} to delete")
                 return False
+
+            customer_deleted = False
+            history_deleted = True  # Default to true if no history to delete
 
             # Delete customer profile
             customer_search = await asyncio.to_thread(
@@ -554,7 +579,11 @@ class VectorDBService:
                     collection_name=self.customers_collection_name,
                     points_selector=[customer_id]
                 )
+                customer_deleted = True
                 app_logger.info(f"Deleted customer profile for {phone_number}")
+            else:
+                app_logger.error(f"Failed to find customer profile for deletion for {phone_number}")
+                customer_deleted = False
 
             # Delete all associated history entries
             history_points = []
@@ -582,9 +611,18 @@ class VectorDBService:
                     collection_name=self.history_collection_name,
                     points_selector=history_points
                 )
+                history_deleted = True
                 app_logger.info(f"Deleted {len(history_points)} history entries for customer {phone_number}")
             else:
                 app_logger.info(f"No history entries found for customer {phone_number}")
+                history_deleted = True
+
+            if not customer_deleted:
+                app_logger.error(f"Failed to delete customer profile for {phone_number}, though history deletion status: {history_deleted}")
+                return False
+            if not history_deleted:
+                app_logger.error(f"Failed to delete history for {phone_number}, though customer profile was deleted")
+                return False
 
             return True
         except Exception as e:
