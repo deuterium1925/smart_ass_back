@@ -306,6 +306,7 @@ class VectorDBService:
         Update a conversation turn with the operator's response using phone_number and timestamp.
         Returns True if successful, False otherwise.
         Strictly enforces that a customer profile must exist before updating history.
+        If an operator_response already exists for the turn, avoids overwriting unless explicitly intended.
         Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
         Optimized to retrieve only necessary data during search.
         """
@@ -338,6 +339,11 @@ class VectorDBService:
                 return False
 
             point = search_result[0][0]
+            existing_operator_response = point.payload.get("operator_response", "").strip()
+            if existing_operator_response:
+                app_logger.warning(f"Operator response already exists for customer {phone_number} at timestamp {timestamp}. Not overwriting.")
+                return False  # Do not overwrite existing response; caller should create a new turn
+
             user_text = point.payload.get("user_text", "")
             content = f"User: {user_text}\nOperator: {operator_response}"
             embedding = await self.get_embedding(content)
