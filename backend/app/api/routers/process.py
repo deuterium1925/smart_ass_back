@@ -1,10 +1,11 @@
 from fastapi import APIRouter, HTTPException, status, Body
-from typing import Optional  # Add this import
+from typing import Optional
 from app.models.schemas import UserMessageInput, ProcessingResultOutput, OperatorResponseInput, AnalysisRequest, ProcessMessageResponse, AgentResponse
 from app.core.orchestrator import analyze_conversation, process_automated_agents
 from app.services.vector_db import vector_db_service
 from app.utils.logger import app_logger, log_message_processing, log_history_storage
 from app.core.state import customer_queue, active_conversation, queue_lock
+from datetime import datetime, timezone
 
 router = APIRouter()
 
@@ -173,47 +174,10 @@ async def analyze_conversation_request(
     summary="Submit Operator Response and Trigger Automated Agents",
     description="""
     Submits the operator's response for the most recent unanswered user message, updates conversation history, 
-    and triggers QA and Summary Agents to provide feedback based on the operator's response. 
-    Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
-    If the customer is the active conversation, allows for updating history accordingly.
-    
-    **Frontend Integration Notes**:
-    - The system automatically identifies the most recent unanswered user message to update with the operator's response.
-    - Ensure `phone_number` matches the customer profile and is in format `89XXXXXXXXX` (11 digits starting with 89) to avoid orphaned data or validation errors.
-    - After submission, QA and Summary results will be available in the response for immediate display. Update any placeholders or loading states with these results.
-    """,
-    status_code=status.HTTP_200_OK,
-)
-@router.post(
-    "/submit_operator_response",
-    response_model=dict,
-    summary="Submit Operator Response and Trigger Automated Agents",
-    description="""
-    Submits the operator's response for a user message, updates conversation history, 
-    and triggers QA and Summary Agents to provide feedback based on the operator's response. 
-    Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
-    If a specific `timestamp` is provided, updates that conversation turn; otherwise, auto-selects the most recent unanswered turn.
-    If no unanswered turns exist, creates a new turn for follow-up communication.
-    If the customer is the active conversation, allows for updating history accordingly.
-    
-    **Frontend Integration Notes**:
-    - Optionally provide `timestamp` (from `/process` or `/history`) to target a specific conversation turn. If omitted, the system selects the most recent unanswered message or creates a new turn.
-    - If no unanswered messages exist or the targeted turn already has a response, a new turn is created for follow-up communication.
-    - Ensure `phone_number` matches the customer profile and is in format `89XXXXXXXXX` (11 digits starting with 89) to avoid orphaned data or validation errors.
-    - After submission, QA and Summary results will be available in the response for immediate display. Update any placeholders or loading states with these results.
-    """,
-    status_code=status.HTTP_200_OK,
-)
-@router.post(
-    "/submit_operator_response",
-    response_model=dict,
-    summary="Submit Operator Response and Trigger Automated Agents",
-    description="""
-    Submits the operator's response for the most recent unanswered user message, updates conversation history, 
     and triggers Summary Agent to provide feedback based on the operator's response. 
     Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
     If a specific `timestamp` is provided, updates that conversation turn; otherwise, auto-selects the most recent unanswered turn.
-    If no unanswered turns exist, creates a new turn for follow-up communication.
+    If no unanswered turns exist or the targeted turn already has a response, creates a new turn for follow-up communication.
     If the customer is the active conversation, allows for updating history accordingly.
     
     **Frontend Integration Notes**:
@@ -260,7 +224,7 @@ async def submit_operator_response(
         selected_turn = None
 
         if timestamp:
-            # If timestamp is provided, find the specific turn
+            # If timestamp is provided, find the specific user turn
             for entry in history_data:
                 if entry["timestamp"] == timestamp and entry["role"] == "user":
                     selected_turn = entry
@@ -273,7 +237,7 @@ async def submit_operator_response(
                 )
             timestamp = selected_turn["timestamp"]
             user_text = selected_turn["user_text"]
-            # If the turn already has a response (i.e., a corresponding assistant turn with the same timestamp exists), create a new follow-up turn
+            # Check if the turn already has an assistant response with the same timestamp
             if any(entry["timestamp"] == timestamp and entry["role"] == "assistant" for entry in history_data):
                 app_logger.info(f"Turn at timestamp {timestamp} for {payload.phone_number} already has a response. Creating new follow-up turn.")
                 from datetime import datetime, timezone
@@ -293,21 +257,33 @@ async def submit_operator_response(
                     )
                 log_history_storage(payload.phone_number, True, "Follow-up turn stored successfully.")
             else:
-                # Update existing turn if no response exists
+                # Update existing turn if no assistant response exists for this timestamp
                 success = await vector_db_service.update_conversation_turn(
                     phone_number=payload.phone_number,
                     timestamp=timestamp,
                     operator_response=payload.operator_response
                 )
                 if not success:
-                    log_history_storage(payload.phone_number, False, "Failed to update conversation turn with operator response.")
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Failed to update conversation turn for customer {payload.phone_number} at timestamp {timestamp}."
+                    app_logger.warning(f"Failed to update turn for {payload.phone_number} at {timestamp}. Creating new turn instead.")
+                    from datetime import datetime, timezone
+                    timestamp = datetime.now(timezone.utc).isoformat()
+                    stored_timestamp = await vector_db_service.store_conversation_turn(
+                        phone_number=payload.phone_number,
+                        user_text=user_text,
+                        operator_response=payload.operator_response,
+                        timestamp=timestamp
                     )
-                log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
+                    if not stored_timestamp:
+                        log_history_storage(payload.phone_number, False, "Failed to store new turn after update failure.")
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to store new turn for customer {payload.phone_number} at timestamp {timestamp}."
+                        )
+                    log_history_storage(payload.phone_number, True, "New turn stored successfully after update failure.")
+                else:
+                    log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
         else:
-            # If no timestamp provided, auto-select the most recent unanswered turn
+            # If no timestamp provided, auto-select the most recent unanswered user turn
             unanswered_turn = await vector_db_service.get_latest_unanswered_turn(payload.phone_number)
             if unanswered_turn:
                 timestamp = unanswered_turn["timestamp"]
@@ -318,14 +294,26 @@ async def submit_operator_response(
                     operator_response=payload.operator_response
                 )
                 if not success:
-                    log_history_storage(payload.phone_number, False, "Failed to update conversation turn with operator response.")
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Failed to update conversation turn for customer {payload.phone_number} at timestamp {timestamp}."
+                    app_logger.warning(f"Failed to update turn for {payload.phone_number} at {timestamp}. Creating new turn instead.")
+                    from datetime import datetime, timezone
+                    timestamp = datetime.now(timezone.utc).isoformat()
+                    stored_timestamp = await vector_db_service.store_conversation_turn(
+                        phone_number=payload.phone_number,
+                        user_text=user_text,
+                        operator_response=payload.operator_response,
+                        timestamp=timestamp
                     )
-                log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
+                    if not stored_timestamp:
+                        log_history_storage(payload.phone_number, False, "Failed to store new turn after update failure.")
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to store new turn for customer {payload.phone_number} at timestamp {timestamp}."
+                        )
+                    log_history_storage(payload.phone_number, True, "New turn stored successfully after update failure.")
+                else:
+                    log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
             else:
-                # If no unanswered turns, create a new follow-up turn
+                # If no unanswered turns, create a new follow-up turn for the operator response
                 app_logger.info(f"No unanswered turns for {payload.phone_number}. Creating new follow-up turn.")
                 from datetime import datetime, timezone
                 timestamp = datetime.now(timezone.utc).isoformat()
@@ -631,7 +619,7 @@ async def cleanup_queue():
             customers_to_remove = []
             for phone_number in customer_queue:
                 history = await vector_db_service.retrieve_conversation_history(phone_number, limit=50)
-                has_unanswered = any(entry["user_text"].strip() and not entry["operator_response"].strip() for entry in history)
+                has_unanswered = any(entry["user_text"].strip() and not any(e["timestamp"] == entry["timestamp"] and e["role"] == "assistant" for e in history) for entry in history if entry["role"] == "user")
                 if not has_unanswered:
                     customers_to_remove.append(phone_number)
             for phone_number in customers_to_remove:
