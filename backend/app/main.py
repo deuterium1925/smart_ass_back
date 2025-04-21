@@ -25,6 +25,7 @@ app = FastAPI(
     - **On-Demand Conversation Analysis**: Allow operators to trigger analysis by Intent, Emotion, Knowledge, and Action Suggestion Agents for specific conversation turns or recent history via `/api/v1/analyze`. This supports batch processing of multiple messages for coherent insights.
     - **Operator Response with Automated Feedback**: Submit operator responses via `/api/v1/submit_operator_response`, triggering QA and Summary Agents for immediate feedback on the response quality and conversation summary.
     - **Manual Agent Trigger**: Manually trigger QA and Summary Agents via `/api/v1/trigger_automated_agents/{phone_number}/{timestamp}` if an operator response is delayed indefinitely.
+    - **Bulk Customer Retrieval**: Retrieve a paginated list of all customers with optional conversation history for app initialization or admin views via `/api/v1/customers/list`.
     - **Personalization**: Integrate customer data (e.g., tariff plans, subscriptions) into agent suggestions for context-aware responses tailored to individual profiles.
 
     ## Workflow Overview
@@ -40,11 +41,13 @@ app = FastAPI(
     - **Delayed Automated Results**: Automated results (QA, Summary) are provided **only after operator response submission** or manual triggering via `/trigger_automated_agents`. Frontend UIs must display placeholders or loading states for these results until they are available.
     - **Error Handling**: Error messages are descriptive and reference `phone_number` and `timestamp` for traceability. Status codes are used consistently (e.g., 400 for bad input like invalid phone number format, 404 for not found, 500 for server errors) to facilitate user-friendly error handling.
     - **Loading States and Triggers**: For seamless user experience, implement placeholders or loading states for QA and Summary feedback after storing a message via `/process`. Update these states once results are available via `/submit_operator_response` or `/trigger_automated_agents`. Consider polling or WebSocket integration if real-time updates are needed for delayed operator responses.
+    - **Bulk Data Loading**: Use `/api/v1/customers/list` at app startup to fetch a paginated list of customers with optional histories. Adjust pagination parameters (`limit`, `offset`) to manage performance.
 
     ## API Endpoints Summary
     - **POST /api/v1/customers/create**: Create or update a customer profile with a normalized phone number (`89XXXXXXXXX`).
     - **GET /api/v1/customers/retrieve/{phone_number}**: Retrieve a customer profile by phone number.
     - **DELETE /api/v1/customers/delete/{phone_number}**: Delete a customer profile and all associated history.
+    - **GET /api/v1/customers/list**: Retrieve a paginated list of all customers with optional conversation history for app initialization or admin views.
     - **POST /api/v1/process**: Store a user message and return a `timestamp` for the turn (QA/Summary delayed).
     - **POST /api/v1/analyze**: Analyze conversation history for actionable insights (Intent, Emotion, Knowledge, Suggestions).
     - **POST /api/v1/submit_operator_response**: Submit operator response for a turn, triggering QA and Summary feedback.

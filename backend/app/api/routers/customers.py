@@ -1,7 +1,9 @@
-from fastapi import APIRouter, HTTPException, status, Body
-from app.models.schemas import CustomerCreateRequest, CustomerCreateResponse, CustomerRetrieveResponse
+from fastapi import APIRouter, HTTPException, status, Body, Query
+from app.models.schemas import CustomerCreateRequest, CustomerCreateResponse, CustomerRetrieveResponse, Customer
 from app.services.vector_db import vector_db_service
 from app.utils.logger import app_logger, log_customer_creation, log_customer_retrieval
+import asyncio
+from typing import List, Optional
 
 router = APIRouter()
 
@@ -189,4 +191,78 @@ async def delete_customer(phone_number: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred: {str(e)}",
+        )
+
+@router.get(
+    "/list",
+    response_model=dict,
+    summary="List All Customers with Optional History",
+    description="""
+    Retrieves a paginated list of all customers with an option to include their conversation histories.
+    Use pagination parameters to manage large datasets. Requires careful handling due to potential performance impact.
+    
+    **Frontend Integration Notes**:
+    - Use this endpoint at app startup or for administrative views to list all customers.
+    - Adjust `limit` and `offset` for pagination to handle large datasets efficiently.
+    - Set `include_history=true` to load conversation histories, but note this may impact performance.
+    - Check `total_count` to implement pagination controls in the UI.
+    """,
+    status_code=status.HTTP_200_OK,
+)
+async def list_customers(
+    limit: int = Query(50, ge=1, le=500, description="Number of customers to retrieve per page"),
+    offset: Optional[str] = Query(None, description="Offset ID for pagination, retrieved from previous response"),
+    include_history: bool = Query(False, description="Whether to include conversation history for each customer")
+):
+    """
+    Endpoint to fetch a paginated list of all customers from the Qdrant customers collection.
+    Optionally includes conversation history for each customer if include_history is true.
+    Uses scroll API for pagination to handle large datasets.
+    """
+    try:
+        app_logger.info(f"Listing customers with limit={limit}, offset={offset}, include_history={include_history}")
+        # Use Qdrant scroll API to paginate through customers
+        search_result = await asyncio.to_thread(
+            vector_db_service.client.scroll,
+            collection_name=vector_db_service.customers_collection_name,
+            limit=limit,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False
+        )
+        
+        customers_data = search_result[0]  # List of points (customer records)
+        next_offset = search_result[1]  # Next offset for pagination
+        
+        customers = []
+        total_count = (await asyncio.to_thread(
+            vector_db_service.client.get_collection,
+            collection_name=vector_db_service.customers_collection_name
+        )).points_count
+        
+        for point in customers_data:
+            customer_payload = point.payload
+            customer_entry = {"customer": Customer(**customer_payload)}
+            if include_history:
+                history = await vector_db_service.retrieve_conversation_history(
+                    phone_number=customer_payload.get("phone_number", ""),
+                    limit=50  # Limit history per customer to avoid overload
+                )
+                customer_entry["history"] = history
+            customers.append(customer_entry)
+        
+        app_logger.info(f"Retrieved {len(customers)} customers out of {total_count} total (offset: {offset or 'start'})")
+        return {
+            "status": "success",
+            "message": f"Retrieved {len(customers)} customers.",
+            "customers": customers,
+            "total_count": total_count,
+            "next_offset": next_offset if next_offset else None,
+            "limit": limit
+        }
+    except Exception as e:
+        app_logger.error(f"Error listing customers: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred while listing customers: {str(e)}",
         )
