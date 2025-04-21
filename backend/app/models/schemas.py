@@ -45,7 +45,6 @@ class CustomerCreateRequest(Customer):
 class OperatorResponseInput(BaseModel):
     """Input model for submitting an operator's response to update conversation history."""
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number in format 89XXXXXXXXX).")
-    timestamp: str = Field(..., description="Timestamp of the conversation turn to update in ISO 8601 format (UTC).")
     operator_response: str = Field(..., description="The response from the operator for the current turn.")
 
     @validator('phone_number')

@@ -171,13 +171,13 @@ async def analyze_conversation_request(
     response_model=dict,
     summary="Submit Operator Response and Trigger Automated Agents",
     description="""
-    Submits the operator's response for a user message, updates conversation history using `timestamp`, 
+    Submits the operator's response for the most recent unanswered user message, updates conversation history, 
     and triggers QA and Summary Agents to provide feedback based on the operator's response. 
     Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
     If the customer is the active conversation, allows for updating history accordingly.
     
     **Frontend Integration Notes**:
-    - Use the `timestamp` returned by `/process` to update the corresponding conversation turn with the operator's response.
+    - The system automatically identifies the most recent unanswered user message to update with the operator's response.
     - Ensure `phone_number` matches the customer profile and is in format `89XXXXXXXXX` (11 digits starting with 89) to avoid orphaned data or validation errors.
     - After submission, QA and Summary results will be available in the response for immediate display. Update any placeholders or loading states with these results.
     """,
@@ -188,20 +188,20 @@ async def submit_operator_response(
 ):
     """
     Endpoint to update a conversation turn with the operator's response in history and trigger QA and Summary Agents.
-    Identifies the turn using phone_number and timestamp.
+    Automatically identifies the most recent unanswered user message using phone_number.
     Rejects operation if no customer profile exists or phone number is invalid.
     Checks if the customer is the active conversation.
     """
     try:
         log_message_processing(payload.phone_number, "STARTED", "Submitting operator response and triggering automated agents.")
         async with queue_lock:
-            if active_conversation and active_conversation != payload.phone_number:
-                app_logger.warning(f"Operator is responding to {payload.phone_number} but active conversation is {active_conversation}.")
-                # Optionally enforce active conversation check
-                # raise HTTPException(
-                #     status_code=status.HTTP_400_BAD_REQUEST,
-                #     detail=f"Cannot respond to {payload.phone_number}. Active conversation is with {active_conversation}. Switch using /next_customer."
-                # )
+            # Check for any remaining unanswered messages after this response
+            history_data = await vector_db_service.retrieve_conversation_history(payload.phone_number, limit=50)
+            has_unanswered = any(entry["user_text"].strip() and not entry["operator_response"].strip() for entry in history_data)
+            if not has_unanswered and payload.phone_number in customer_queue:
+                customer_queue.remove(payload.phone_number)
+                app_logger.info(f"Removed customer {payload.phone_number} from queue as no unanswered messages remain. Queue length: {len(customer_queue)}")
+                await vector_db_service.save_queue_state(list(customer_queue), active_conversation)
 
         # Check if customer profile exists before updating history
         customer = await vector_db_service.retrieve_customer(payload.phone_number)
@@ -211,36 +211,49 @@ async def submit_operator_response(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Ошибка: Профиль клиента с номером телефона {payload.phone_number} не найден. Пожалуйста, создайте профиль перед обновлением истории."
             )
+
+        # Retrieve conversation history to find the most recent unanswered user message
+        history_data = await vector_db_service.retrieve_conversation_history(payload.phone_number, limit=50)
+        if not history_data:
+            log_message_processing(payload.phone_number, "FAILED", "No conversation history found.")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No conversation history found for customer {payload.phone_number}."
+            )
+
+        # Identify the most recent unanswered user message
+        unanswered_turn = None
+        for entry in reversed(history_data):  # Check from the most recent to oldest
+            if entry["user_text"].strip() and not entry["operator_response"].strip():
+                unanswered_turn = entry
+                break
+
+        if not unanswered_turn:
+            log_message_processing(payload.phone_number, "FAILED", "No unanswered user messages found.")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No unanswered user messages found for customer {payload.phone_number}."
+            )
+
+        timestamp = unanswered_turn["timestamp"]
+        user_text = unanswered_turn["user_text"]
         success = await vector_db_service.update_conversation_turn(
             phone_number=payload.phone_number,
-            timestamp=payload.timestamp,
+            timestamp=timestamp,
             operator_response=payload.operator_response
         )
         if not success:
             log_history_storage(payload.phone_number, False, "Failed to update conversation turn with operator response.")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Conversation turn not found for customer {payload.phone_number} at timestamp {payload.timestamp}."
+                detail=f"Failed to update conversation turn for customer {payload.phone_number} at timestamp {timestamp}."
             )
         log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
 
         # Trigger automated agents (QA and Summary) after operator response
-        history_data = await vector_db_service.retrieve_conversation_history(payload.phone_number, limit=10)
-        user_text = ""
-        for entry in history_data:
-            if entry["timestamp"] == payload.timestamp:
-                user_text = entry["user_text"]
-                break
-        if not user_text:
-            app_logger.warning(f"Could not find user text for timestamp {payload.timestamp} for customer {payload.phone_number}")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User message not found for timestamp {payload.timestamp} for customer {payload.phone_number}."
-            )
-
         automated_result = await process_automated_agents(
             phone_number=payload.phone_number,
-            timestamp=payload.timestamp,
+            timestamp=timestamp,
             user_text=user_text,
             operator_response=payload.operator_response
         )
@@ -248,6 +261,7 @@ async def submit_operator_response(
         return {
             "status": "success",
             "message": "Operator response updated and automated agents processed successfully.",
+            "timestamp": timestamp,  # Return the identified timestamp for reference
             "automated_results": {
                 "summary": automated_result.get("summary", AgentResponse(
                     agent_name="SummaryAgent",
@@ -273,10 +287,10 @@ async def submit_operator_response(
         raise
     except Exception as e:
         log_message_processing(payload.phone_number if hasattr(payload, 'phone_number') else "unknown", "FAILED", f"Error submitting operator response: {str(e)}")
-        app_logger.error(f"Error updating operator response for customer {payload.phone_number if hasattr(payload, 'phone_number') else 'unknown'} at timestamp {payload.timestamp if hasattr(payload, 'timestamp') else 'unknown'}: {e}")
+        app_logger.error(f"Error updating operator response for customer {payload.phone_number if hasattr(payload, 'phone_number') else 'unknown'}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred while updating operator response for customer {payload.phone_number if hasattr(payload, 'phone_number') else 'unknown'} at timestamp {payload.timestamp if hasattr(payload, 'timestamp') else 'unknown'}: {str(e)}",
+            detail=f"An unexpected error occurred while updating operator response for customer {payload.phone_number if hasattr(payload, 'phone_number') else 'unknown'}: {str(e)}",
         )
 
 @router.post(
