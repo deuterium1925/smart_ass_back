@@ -1,52 +1,76 @@
 <script setup>
-import { watch } from 'vue';
+import { ref, watch } from 'vue';
+import { getAnalyze } from '@/api/apiBase';
+import { userStore } from "@/store/userStore";
 
-const props = defineProps({
-  chat: {
-    type: Object,
-    required: true,
-  },
+const usersStore = userStore();
+const suggestions = ref([]);
+const feedback = ref('');
+const intent = ref('');
+const emotion = ref('');
+
+const fetchAnalyze = async () => {
+  usersStore.updateLoading(true);
+
+  const body = {
+    "phone_number": usersStore.currentUser?.phone_number,
+    "history_limit": 1
+  };
+
+  try {
+    const result = await getAnalyze(body);
+    suggestions.value = result.data?.suggestions ?? [];
+    feedback.value = result.data?.qa_feedback?.result?.feedback ?? '';
+    intent.value = result.data?.intent?.result?.intent ?? '';
+    emotion.value = result.data?.emotion?.result?.emotion ?? '';
+  } catch {
+    suggestions.value = [];
+    feedback.value = '';
+    intent.value = '';
+    emotion.value = '';
+  } finally {
+    usersStore.updateLoading(false);
+  }
+};
+
+watch(() => usersStore.updatetAnalize, () => {
+  suggestions.value = [];
+  feedback.value = '';
+  intent.value = '';
+  emotion.value = '';
+
+  fetchAnalyze();
 });
-
-// Watch for changes in chat to fetch new AI suggestions as the conversation progresses (the description and function are wrong)
-watch(
-  () => props.chat.id,
-  (newChatId, oldChatId) => {
-    if (newChatId) {
-      console.log(`Chat changed to: ${newChatId} from ${oldChatId}. Fetching messages...`);
-      // --- TODO: Add logic here to fetch messages for newChatId ---
-      // e.g., fetch(`/api/chats/${newChatId}/messages`)
-    } else {
-      // Clear messages if no chat is selected
-    }
-  },
-);
 </script>
 
 <template>
   <div class="agent-help">
-    <div class="operator-performance">
-      <span class="embolden">Характер диалога:</span> ты тупой? Не будь как робот, разговаривай
-      по-человечески. Иначе пойдёшь улицы подметать. Или того хуже — фронтенд делать.
-    </div>
-    <div class="client-emotion">
-      <span class="embolden">Настроение:</span> Клиент тебя ненавидит.
-    </div>
-    <ul class="suggestions">
-      <li>
-        First of all, I am really sorry I confused you by my greeting! Second, I can assure you that
-        I am a real person. Tell me, please, what is your issue? I will be happy to help you!
-      </li>
-      <li>Maybe you are a robot? Why are you so rude? I just want to help.</li>
-      <li>
-        Пошёл к чёрту, я не говорю на английском. Это МТС, motherfucker, так что пиши на русском.
-      </li>
-    </ul>
-    <div class="recommended">
-      <span class="embolden">Рекомендуемый ответ:</span> First of all, I am really sorry I confused
-      you by my greeting! Second, I can assure you that I am a real person. Tell me, please, what is
-      your issue? I will be happy to help you!
-    </div>
+    {{ usersStore.isUpdate }}
+    <div v-if="usersStore.isLoading" class="spinner"></div>
+
+    <template v-else>
+      <div v-if="intent" class="operator-performance">
+        <span class="embolden">Характер диалога:</span>
+        {{ intent }}
+      </div>
+
+      <div v-if="emotion" class="client-emotion">
+        <span class="embolden">Настроение:</span>
+        {{ emotion }}
+      </div>
+
+      <ul v-if="suggestions.length !== 0" class="suggestions">
+        <li v-for="suggest in suggestions" :key="suggest.priority">
+          {{ suggest.text }}
+        </li>
+      </ul>
+    
+      <div v-if="feedback" class="recommended">
+        <span class="embolden">Рекомендуемый ответ:</span>
+
+        {{ feedback }}
+      </div>
+    </template>
   </div>
 </template>
 
@@ -57,16 +81,19 @@ watch(
   flex-direction: column;
   gap: 1.3rem;
   padding: 1rem;
-  & > *:not(.suggestions),
-  .suggestions > li {
+
+  &>*:not(.suggestions),
+  .suggestions>li {
     background-color: var(--grey);
     padding: 0.8rem;
     border-radius: 1.2rem;
   }
 }
+
 .embolden {
   font-weight: 700;
 }
+
 .suggestions {
   padding: 0;
   list-style-type: none;
@@ -74,8 +101,28 @@ watch(
   justify-content: space-between;
   gap: 1rem;
   margin-top: auto;
-  & > li {
+
+  &>li {
     width: 31%;
+  }
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #3498db;
+  border-radius: 50%;
+  border-bottom-color: transparent;
+  /* делаем одну часть прозрачной */
+  background: transparent;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+  align-self: center;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>

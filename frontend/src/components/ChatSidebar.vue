@@ -1,38 +1,40 @@
 <script setup>
+import { ref, onMounted } from 'vue';
 import ChatItem from './ChatItem.vue';
+import { getUser } from '@/api/apiBase'
+import { userStore } from "@/store/userStore";
 
-// Define props received from App.vue
-const props = defineProps({
-  chats: {
-    type: Array,
-    required: true,
-  },
-  activeChatId: {
-    type: [String, null], // Can be string ID or null
-    default: null,
-  },
-});
+const usersStore = userStore();
+const selectedIndex = ref(null);
 
-// Define emits to send event back up to App.vue
-const emit = defineEmits(['select-chat']);
-
-// Method to emit the selected chat ID
-function selectChat(chat) {
-  emit('select-chat', chat);
+function selectChat(index) {
+  selectedIndex.value = index;
+  usersStore.setUser(index);
 }
+
+const phonesUser = ['89111111111', '89123456789', '89169999933'];
+
+onMounted(async () => {
+  const promise = phonesUser.map((el) => getUser(el))
+
+  const result = await Promise.allSettled(promise);
+
+  const userArr = [];
+  result.forEach(element => {
+    if (element.status === 'fulfilled') {
+      userArr.push(element.value?.data?.customer)
+    }
+  });
+
+  usersStore.setUsers(userArr);
+});
 </script>
 
 <template>
   <div class="chat-sidebar">
     <ul class="chat-list">
-      <!-- Iterate over the chats passed as a prop -->
-      <ChatItem
-        v-for="chat in chats"
-        :key="chat.id"
-        :chat="chat"
-        :isActive="chat.id === activeChatId"
-        @click="selectChat(chat)"
-      />
+      <ChatItem v-for="(user, idx) in usersStore.users" :key="idx" :chat="user" :isActive="idx === selectedIndex"
+        @click="selectChat(idx)" />
     </ul>
   </div>
 </template>

@@ -1,59 +1,55 @@
 <script setup>
-import { watch } from 'vue';
+import { userStore } from "@/store/userStore";
 
-const props = defineProps({
-  chat: {
-    type: Object,
-    required: true,
-  },
-});
+const usersStore = userStore();
+const endStr = "XX";
 
-// Watch for changes in chat to fetch new info if needed (the description and function are wrong)
-watch(
-  () => props.chat.id,
-  (newChatId, oldChatId) => {
-    if (newChatId) {
-      console.log(`Chat changed to: ${newChatId} from ${oldChatId}. Fetching messages...`);
-      // --- TODO: Add logic here to fetch info for newChatId ---
-      // e.g., fetch(`/api/chats/${newChatId}/messages`)
-    } else {
-      // Clear messages if no chat is selected
-    }
-  },
-);
+const isPresen = (state) => {
+  return state ? 'есть' : 'нет';
+};
+
+const isTrust = (state) => {
+  return state ? 'да' : 'нет';
+}
+
 </script>
 
 <template>
   <div class="info-wrapper">
     <h2>Данные клиента</h2>
+
+    {{ tt }}
+
     <ul class="info">
-      <li>8-916-999-99-XX</li>
-      <li>Абонент МТС: да</li>
-      <li>Тариф: Конвергентный тарифный план Тариф №7 (мобильная связь</li>
+      <li>{{ usersStore.currentUser?.phone_number?.slice(0, -2) + `-${endStr}` }}</li>
+      <li>Абонент МТС: {{ isTrust(usersStore.currentUser?.is_mts_subscriber) }}</li>
+
+      <li>Тариф: {{ usersStore.currentUser?.tariff_plan }}</li>
       <li>МТС + домашний интернет + ТВ)</li>
-      <li>Мобильная связь: есть</li>
-      <li>Домашний интернет: есть</li>
-      <li>Домашнее ТВ: есть</li>
-      <li>Домашний телефон: нет</li>
-      <li>Устройство: iPhone 16 pro 256 GB</li>
-      <li>ОС: iOS, версия 18.4</li>
-      <li>Пользователь приложения Мой МТС: да</li>
-      <li>Пользователь Личный кабинет: нет</li>
-      <li>Пользователь приложения МТС Банк: да</li>
-      <li>Пользователь приложения МТС Деньги: нет</li>
-      <li>Подписки и сервисы на номере: нет</li>
-      <li>МТС Premium: есть</li>
-      <li>МТС Cashback: есть</li>
-      <li>Защитник базовый: есть</li>
-      <li>Защитник+: нет</li>
-      <li>Отдельная подписка Kion: нет</li>
-      <li>Отдельная подписка Музыка: нет</li>
-      <li>Отдельная подписка Строки: нет</li>
-      <li>Дебетовая карта МТС Банк: есть</li>
-      <li>Кредитная карта МТС Банк: нет</li>
-      <li>Дебетовая карта МТС Деньги: нет</li>
-      <li>Кредитная карта МТС Деньги: нет</li>
-      <li>Виртуальная карта МТС Деньги: нет</li>
+
+      <li>Мобильная связь: {{ isPresen(usersStore.currentUser?.has_mobile) }}</li>
+      <li>Домашний интернет: {{ isPresen(usersStore.currentUser?.has_home_internet) }}</li>
+      <li>Домашнее ТВ: {{ isPresen(usersStore.currentUser?.has_home_tv) }}</li>
+      <li>Домашний телефон: {{ isPresen(usersStore.currentUser?.has_home_phone) }}</li>
+      <li>Устройство: {{ usersStore.currentUser?.device }}</li>
+      <li>ОС: {{ usersStore.currentUser?.os }}</li>
+      <li>Пользователь приложения Мой МТС: {{ isTrust(usersStore.currentUser?.uses_my_mts_app) }}</li>
+      <li>Пользователь Личный кабинет: {{ isTrust(usersStore.currentUser?.uses_personal_account) }}</li>
+      <li>Пользователь приложения МТС Банк: {{ isTrust(usersStore.currentUser?.uses_mts_bank_app) }}</li>
+      <li>Пользователь приложения МТС Деньги: {{ isTrust(usersStore.currentUser?.uses_mts_money_app) }}</li>
+      <li>Подписки и сервисы на номере: {{ isPresen(usersStore.currentUser?.subscriptions_and_services) }}</li>
+      <li>МТС Premium: {{ isPresen(usersStore.currentUser?.has_mts_premium) }}</li>
+      <li>МТС Cashback: {{ isPresen(usersStore.currentUser?.has_mts_cashback) }}</li>
+      <li>Защитник базовый: {{ isPresen(usersStore.currentUser?.has_defender_basic) }}</li>
+      <li>Защитник+: {{ isPresen(usersStore.currentUser?.has_defender_plus) }}</li>
+      <li>Отдельная подписка Kion: {{ isPresen(usersStore.currentUser?.has_kion_subscription) }}</li>
+      <li>Отдельная подписка Музыка: {{ isPresen(usersStore.currentUser?.has_music_subscription) }}</li>
+      <li>Отдельная подписка Строки: {{ isPresen(usersStore.currentUser?.has_strings_subscription) }}</li>
+      <li>Дебетовая карта МТС Банк: {{ isPresen(usersStore.currentUser?.has_mts_bank_debit_card) }}</li>
+      <li>Кредитная карта МТС Банк: {{ isPresen(usersStore.currentUser?.has_mts_bank_credit_card) }}</li>
+      <li>Дебетовая карта МТС Деньги: {{ isPresen(usersStore.currentUser?.has_mts_money_debit_card) }}</li>
+      <li>Кредитная карта МТС Деньги: {{ isPresen(usersStore.currentUser?.has_mts_money_credit_card) }}</li>
+      <li>Виртуальная карта МТС Деньги: {{ isPresen(usersStore.currentUser?.has_mts_money_virtual_card) }}</li>
     </ul>
   </div>
 </template>
@@ -66,10 +62,12 @@ watch(
   background-color: var(--grey);
   padding: 1rem;
 }
+
 h2 {
   font-size: 1.1rem;
   font-family: Arial;
 }
+
 ul {
   padding: 0;
   list-style-type: none;
