@@ -13,10 +13,10 @@ from app.core.config import get_settings
 
 async def process_automated_agents(phone_number: str, timestamp: str, user_text: str, operator_response: str = "") -> Dict[str, Any]:
     """
-    Run automated agents (QA and Summary) after an operator submits a response or manually triggered.
+    Run automated agents (Summary only) after an operator submits a response or manually triggered.
     Returns results of automated agents for inclusion in the response.
     Takes both user_text and operator_response to ensure contextual relevance.
-    QA Agent runs only if operator_response is provided; otherwise, a placeholder is returned.
+    QA Agent is now part of analyze_conversation and not triggered here.
     """
     app_logger.info(f"Orchestrator: Running automated agents for customer {phone_number}, timestamp {timestamp}")
     settings = get_settings()
@@ -29,8 +29,7 @@ async def process_automated_agents(phone_number: str, timestamp: str, user_text:
             if not customer_data:
                 app_logger.error(f"No customer data found for {phone_number}. Skipping automated agents.")
                 return {
-                    "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Customer profile not found."}, "confidence": 0.0, "error": f"Customer profile not found for {phone_number}."},
-                    "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "Customer profile not found."}, "confidence": 0.0, "error": f"Customer profile not found for {phone_number}."}
+                    "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Customer profile not found."}, "confidence": 0.0, "error": f"Customer profile not found for {phone_number}."}
                 }
 
             history_data = await vector_db_service.retrieve_conversation_history(phone_number, limit=10)
@@ -38,19 +37,9 @@ async def process_automated_agents(phone_number: str, timestamp: str, user_text:
             app_logger.debug(f"Retrieved history for automated agents for customer {phone_number}: {len(history)} turns")
             log_history_retrieval(phone_number, len(history))
 
-            # Run Summary Agent always, but QA Agent only if operator_response is non-empty
+            # Run only Summary Agent
             summary_task = asyncio.create_task(summary_agent.summarize_conversation(history, user_text))
-            qa_result = None
-            if operator_response.strip():
-                qa_task = asyncio.create_task(qa_agent.check_quality(user_text, operator_response))
-                summary_result, qa_result = await asyncio.gather(summary_task, qa_task, return_exceptions=True)
-            else:
-                summary_result = await summary_task
-                qa_result = AgentResponse(
-                    agent_name="QAAgent",
-                    result={"feedback": "QA feedback will be generated after operator response."},
-                    confidence=0.0
-                )
+            summary_result = await summary_task
 
             if isinstance(summary_result, Exception):
                 app_logger.error(f"Summary Agent failed for customer {phone_number} at timestamp {timestamp}: {str(summary_result)}")
@@ -60,39 +49,32 @@ async def process_automated_agents(phone_number: str, timestamp: str, user_text:
                     confidence=0.0,
                     error=f"Agent failed for customer {phone_number} at timestamp {timestamp}: {str(summary_result)}"
                 )
-            if isinstance(qa_result, Exception):
-                app_logger.error(f"QA Agent failed for customer {phone_number} at timestamp {timestamp}: {str(qa_result)}")
-                qa_result = AgentResponse(
-                    agent_name="QAAgent",
-                    result={"feedback": "Failed to generate QA feedback."},
-                    confidence=0.0,
-                    error=f"Agent failed for customer {phone_number} at timestamp {timestamp}: {str(qa_result)}"
-                )
 
             app_logger.info(f"Orchestrator: Completed automated agents for customer {phone_number} at timestamp {timestamp}")
             return {
                 "summary": summary_result,
-                "qa_feedback": qa_result
+                "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "QA feedback available only during analysis via /analyze."}, "confidence": 0.0}
             }
 
     except asyncio.TimeoutError as e:
         app_logger.error(f"Timeout during automated agent processing for customer {phone_number} at timestamp {timestamp} after {timeout_seconds}s")
         return {
             "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Timeout error."}, "confidence": 0.0, "error": f"Timeout after {timeout_seconds}s for customer {phone_number} at timestamp {timestamp}"},
-            "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "Timeout error."}, "confidence": 0.0, "error": f"Timeout after {timeout_seconds}s for customer {phone_number} at timestamp {timestamp}"}
+            "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "QA feedback available only during analysis via /analyze."}, "confidence": 0.0}
         }
     except Exception as e:
         app_logger.error(f"Automated agent processing failed for customer {phone_number} at timestamp {timestamp}: {e}")
         return {
             "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Processing error."}, "confidence": 0.0, "error": f"Processing error for customer {phone_number} at timestamp {timestamp}: {str(e)}"},
-            "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "Processing error."}, "confidence": 0.0, "error": f"Processing error for customer {phone_number} at timestamp {timestamp}: {str(e)}"}
+            "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "QA feedback available only during analysis via /analyze."}, "confidence": 0.0}
         }
 
 async def analyze_conversation(payload: AnalysisRequest) -> ProcessingResultOutput:
     """
     Analyze conversation history for a customer based on specific timestamps or recent history.
-    Orchestrates agent processing for intent, emotion, knowledge, and suggestions.
+    Orchestrates agent processing for intent, emotion, knowledge, suggestions, and QA.
     Ensures dependencies are handled by running prerequisite agents (Intent, Emotion) before dependent agents (Action).
+    Returns an error if no conversation history exists.
     """
     phone_number = payload.phone_number
     timestamps = payload.timestamps
@@ -118,6 +100,17 @@ async def analyze_conversation(payload: AnalysisRequest) -> ProcessingResultOutp
             history = [HistoryEntry(**entry) for entry in history_data] if history_data else []
             app_logger.debug(f"Retrieved history for customer {phone_number}: {len(history)} turns")
             log_history_retrieval(phone_number, len(history))
+
+            # Check if history exists; if not, return an error
+            if not history:
+                app_logger.warning(f"No conversation history found for customer {phone_number}. Analysis cannot proceed.")
+                return ProcessingResultOutput(
+                    phone_number=phone_number,
+                    consolidated_output=f"Ошибка: История диалога для клиента {phone_number} не найдена. Анализ невозможен без истории.",
+                    customer_data=customer_data,
+                    conversation_history=[],
+                    history_storage_status=True
+                )
 
             # Filter by specific timestamps if provided
             if timestamps:
@@ -185,20 +178,46 @@ async def analyze_conversation(payload: AnalysisRequest) -> ProcessingResultOutp
                 customer_data=customer_data, history=history
             ))
 
+            # Run QA Agent if there is an operator response in the history
+            qa_result = AgentResponse(
+                agent_name="QAAgent",
+                result={"feedback": "QA feedback not generated. No operator response found in history."},
+                confidence=0.0
+            )
+            # Check history for operator responses (prioritize the latest turn)
+            latest_turn_with_response = None
+            for entry in reversed(history):
+                if entry.operator_response.strip():
+                    latest_turn_with_response = entry
+                    break
+            
+            if latest_turn_with_response:
+                app_logger.info(f"Running QA Agent for customer {phone_number} on latest turn with operator response at timestamp {latest_turn_with_response.timestamp}")
+                qa_task = asyncio.create_task(qa_agent.check_quality(
+                    latest_turn_with_response.user_text, 
+                    latest_turn_with_response.operator_response
+                ))
+                qa_result = await qa_task
+                if isinstance(qa_result, Exception):
+                    app_logger.error(f"QA Agent failed for customer {phone_number}: {str(qa_result)}")
+                    qa_result = AgentResponse(
+                        agent_name="QAAgent",
+                        result={"feedback": "Failed to generate QA feedback."},
+                        confidence=0.0,
+                        error=f"Agent failed for customer {phone_number}: {str(qa_result)}"
+                    )
+            else:
+                app_logger.debug(f"No operator response found in history for customer {phone_number}. Skipping QA Agent.")
+
             suggestions = await suggestions_task
             if isinstance(suggestions, Exception):
                 app_logger.error(f"Action Agent failed for customer {phone_number}: {str(suggestions)}")
                 suggestions = []
 
-            # Summary and QA results are not re-run here as they are automated after operator response
+            # Summary Agent still not re-run here as it might be triggered separately after operator response
             summary_result = AgentResponse(
                 agent_name="SummaryAgent",
-                result={"summary": "Summary not generated during operator-triggered analysis. Available after operator response or manual trigger."},
-                confidence=0.0
-            )
-            qa_result = AgentResponse(
-                agent_name="QAAgent",
-                result={"feedback": "QA feedback not generated during operator-triggered analysis. Available after operator response or manual trigger."},
+                result={"summary": "Summary not generated during operator-triggered analysis. Available after manual trigger if needed."},
                 confidence=0.0
             )
 

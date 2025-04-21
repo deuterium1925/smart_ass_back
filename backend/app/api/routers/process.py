@@ -114,15 +114,15 @@ async def handle_process_message(
     response_model=ProcessingResultOutput,
     summary="Analyze Conversation On-Demand",
     description="""
-    Triggers agent analysis (Intent, Emotion, Knowledge, Action Suggestion) for specific conversation turns or recent history on operator request. 
-    Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
+    Triggers agent analysis (Intent, Emotion, Knowledge, Action Suggestion, QA) for specific conversation turns or recent history on operator request. 
+    Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX` and conversation history to exist.
     
     **Frontend Integration Notes**:
     - Use `timestamps` to analyze specific conversation turns (identified by `timestamp` from `/process` responses), or rely on `history_limit` to analyze recent messages.
-    - Results include detailed analysis from operator-controlled agents, which can be used to display suggestions or insights in the UI.
+    - Results include detailed analysis from operator-controlled agents, including QA feedback if an operator response exists in history, which can be used to display suggestions or insights in the UI.
     - `conversation_history` in the response provides the context used for analysis, aiding in displaying relevant chat history.
     - Check `consolidated_output` for a quick summary of analysis results.
-    - Note that QA and Summary results are only available after an operator response is submitted via `/submit_operator_response` or manually triggered via `/trigger_automated_agents`.
+    - Analysis will not proceed without conversation history and will return an error in such cases.
     - Ensure `phone_number` is in format `89XXXXXXXXX` (11 digits starting with 89) before calling this endpoint to avoid validation errors.
     """,
     status_code=status.HTTP_200_OK,
