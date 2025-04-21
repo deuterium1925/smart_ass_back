@@ -468,3 +468,72 @@ async def get_queue_status():
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred while fetching queue status: {str(e)}",
         )
+
+@router.get(
+    "/history/{phone_number}",
+    response_model=dict,
+    summary="Retrieve Conversation History",
+    description="""
+    Retrieves the conversation history for a specific customer identified by `phone_number` in format `89XXXXXXXXX`.
+    Returns a list of conversation turns including user messages and operator responses, ordered by timestamp.
+    
+    **Frontend Integration Notes**:
+    - Use this endpoint to fetch the complete message history for a customer without triggering analysis.
+    - Ensure `phone_number` is in format `89XXXXXXXXX` (11 digits starting with 89) to avoid validation errors.
+    - The response includes a list of history entries with user text, operator responses, and timestamps.
+    - Use the `limit` query parameter to control the number of recent history entries retrieved (default is 50).
+    """,
+    status_code=status.HTTP_200_OK,
+)
+async def retrieve_history(phone_number: str, limit: int = 50):
+    """
+    Endpoint to fetch the conversation history for a customer identified by phone_number.
+    Returns a list of history entries ordered by timestamp.
+    Rejects operation if no customer profile exists or phone number is invalid.
+    """
+    try:
+        # Normalize and validate phone number
+        cleaned_phone = ''.join(filter(str.isdigit, phone_number))
+        if len(cleaned_phone) != 11 or not cleaned_phone.startswith('89'):
+            log_message_processing(phone_number, "FAILED", "Invalid phone number format.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number must be 11 digits starting with '89' (format: 89XXXXXXXXX)."
+            )
+
+        log_message_processing(cleaned_phone, "STARTED", f"Retrieving conversation history with limit {limit}.")
+        # Check if customer profile exists
+        customer = await vector_db_service.retrieve_customer(cleaned_phone)
+        if not customer:
+            log_message_processing(cleaned_phone, "FAILED", "Customer profile not found.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Ошибка: Профиль клиента с номером телефона {cleaned_phone} не найден."
+            )
+
+        # Retrieve conversation history
+        history_data = await vector_db_service.retrieve_conversation_history(cleaned_phone, limit=limit)
+        if not history_data:
+            log_message_processing(cleaned_phone, "COMPLETED", "No conversation history found.")
+            return {
+                "status": "success",
+                "message": f"No conversation history found for customer {cleaned_phone}.",
+                "history": []
+            }
+
+        log_message_processing(cleaned_phone, "COMPLETED", f"Retrieved {len(history_data)} conversation turns.")
+        return {
+            "status": "success",
+            "message": f"Retrieved conversation history for customer {cleaned_phone}.",
+            "history": history_data
+        }
+    except HTTPException as he:
+        log_message_processing(phone_number, "FAILED", f"Error retrieving history: {str(he.detail)}")
+        raise
+    except Exception as e:
+        log_message_processing(phone_number, "FAILED", f"Error retrieving history: {str(e)}")
+        app_logger.error(f"Error retrieving conversation history for customer {phone_number}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred while retrieving history for customer {phone_number}: {str(e)}",
+        )
