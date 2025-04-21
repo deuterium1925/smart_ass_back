@@ -9,6 +9,7 @@ from qdrant_client.http.models import PointStruct, VectorParams, Distance
 import asyncio
 import hashlib
 from typing import List, Dict, Tuple, Optional
+from collections import deque
 
 settings = get_settings()
 
@@ -25,7 +26,6 @@ app = FastAPI(
     - **On-Demand Conversation Analysis**: Allow operators to trigger analysis by Intent, Emotion, Knowledge, and Action Suggestion Agents for specific conversation turns or recent history via `/api/v1/analyze`. This supports batch processing of multiple messages for coherent insights.
     - **Operator Response with Automated Feedback**: Submit operator responses via `/api/v1/submit_operator_response`, triggering QA and Summary Agents for immediate feedback on the response quality and conversation summary.
     - **Manual Agent Trigger**: Manually trigger QA and Summary Agents via `/api/v1/trigger_automated_agents/{phone_number}/{timestamp}` if an operator response is delayed indefinitely.
-    - **Bulk Customer Retrieval**: Retrieve a paginated list of all customers with optional conversation history for app initialization or admin views via `/api/v1/customers/list`.
     - **Personalization**: Integrate customer data (e.g., tariff plans, subscriptions) into agent suggestions for context-aware responses tailored to individual profiles.
 
     ## Workflow Overview
@@ -41,13 +41,11 @@ app = FastAPI(
     - **Delayed Automated Results**: Automated results (QA, Summary) are provided **only after operator response submission** or manual triggering via `/trigger_automated_agents`. Frontend UIs must display placeholders or loading states for these results until they are available.
     - **Error Handling**: Error messages are descriptive and reference `phone_number` and `timestamp` for traceability. Status codes are used consistently (e.g., 400 for bad input like invalid phone number format, 404 for not found, 500 for server errors) to facilitate user-friendly error handling.
     - **Loading States and Triggers**: For seamless user experience, implement placeholders or loading states for QA and Summary feedback after storing a message via `/process`. Update these states once results are available via `/submit_operator_response` or `/trigger_automated_agents`. Consider polling or WebSocket integration if real-time updates are needed for delayed operator responses.
-    - **Bulk Data Loading**: Use `/api/v1/customers/list` at app startup to fetch a paginated list of customers with optional histories. Adjust pagination parameters (`limit`, `offset`) to manage performance.
 
     ## API Endpoints Summary
     - **POST /api/v1/customers/create**: Create or update a customer profile with a normalized phone number (`89XXXXXXXXX`).
     - **GET /api/v1/customers/retrieve/{phone_number}**: Retrieve a customer profile by phone number.
     - **DELETE /api/v1/customers/delete/{phone_number}**: Delete a customer profile and all associated history.
-    - **GET /api/v1/customers/list**: Retrieve a paginated list of all customers with optional conversation history for app initialization or admin views.
     - **POST /api/v1/process**: Store a user message and return a `timestamp` for the turn (QA/Summary delayed).
     - **POST /api/v1/analyze**: Analyze conversation history for actionable insights (Intent, Emotion, Knowledge, Suggestions).
     - **POST /api/v1/submit_operator_response**: Submit operator response for a turn, triggering QA and Summary feedback.
@@ -62,18 +60,22 @@ app = FastAPI(
 app.include_router(process_router.router, prefix="/api/v1", tags=["Processing"])
 app.include_router(customers_router.router, prefix="/api/v1/customers", tags=["Customers"])
 
+# In-memory queue for customers with unresponded messages (FIFO)
+customer_queue = deque()
+# Active conversation state (phone_number of the current customer being handled)
+active_conversation = None
+# Lock for thread-safe queue operations
+queue_lock = asyncio.Lock()
 
 @app.get("/health", tags=["Health"])
 async def health_check():
     """Verify the API's operational status with a simple health check endpoint."""
     return {"status": "ok"}
 
-
 def compute_content_hash(entry: Dict) -> str:
     """Compute a unique hash of a knowledge base entry's content for versioning and comparison purposes."""
     content = f"{entry.get('query', '')}{entry.get('correct_answer', '')}{entry.get('correct_sources', '')}"
     return hashlib.md5(content.encode('utf-8')).hexdigest()
-
 
 async def generate_embeddings_batch(entries: List[Dict], batch_size: int = 50, max_concurrent_batches: int = 5) -> List[Tuple[Dict, List[float]]]:
     """
@@ -108,7 +110,6 @@ async def generate_embeddings_batch(entries: List[Dict], batch_size: int = 50, m
     
     return results
 
-
 async def upsert_batch_to_qdrant(points: List[PointStruct], batch_size: int = 200) -> bool:
     """
     Upsert points to Qdrant vector database in batches for efficient storage.
@@ -128,7 +129,6 @@ async def upsert_batch_to_qdrant(points: List[PointStruct], batch_size: int = 20
     except Exception as e:
         app_logger.error(f"Failed to upsert batch to Qdrant: {str(e)}")
         return False
-
 
 async def initialize_vector_db(recreate_knowledge_collection: bool = True) -> bool:
     """
@@ -180,12 +180,17 @@ async def initialize_vector_db(recreate_knowledge_collection: bool = True) -> bo
         )
         app_logger.info(f"Collection {vector_db_service.customers_collection_name} status: {collection_info_customers.points_count} points")
         
+        collection_info_queue = await asyncio.to_thread(
+            vector_db_service.client.get_collection,
+            collection_name=vector_db_service.queue_collection_name
+        )
+        app_logger.info(f"Collection {vector_db_service.queue_collection_name} status: {collection_info_queue.points_count} points")
+        
         app_logger.info("Vector database collections initialized successfully.")
         return True
     except Exception as e:
         app_logger.error(f"Failed to initialize vector database: {str(e)}")
         return False
-
 
 async def check_critical_entries(collection_name: str, critical_keyword: str = "кион") -> bool:
     """
@@ -219,7 +224,6 @@ async def check_critical_entries(collection_name: str, critical_keyword: str = "
     except Exception as e:
         app_logger.error(f"Error checking critical entries in Qdrant for '{critical_keyword}': {str(e)}")
         return False
-
 
 async def index_knowledge_base() -> bool:
     """
@@ -313,7 +317,6 @@ async def index_knowledge_base() -> bool:
         app_logger.warning("Continuing startup despite indexing failure to avoid blocking API.")
         return True  # Continue startup to avoid blocking API
 
-
 async def cleanup_orphaned_history() -> bool:
     """
     Perform strict cleanup of orphaned conversation history entries to maintain data integrity.
@@ -328,12 +331,61 @@ async def cleanup_orphaned_history() -> bool:
         app_logger.error(f"Error during strict cleanup of orphaned history entries: {str(e)}")
         return False
 
+async def load_queue_state() -> bool:
+    """
+    Load the persisted queue state and active conversation from the vector database on startup.
+    Populates the in-memory customer_queue and active_conversation variables.
+    Returns True if successful, False otherwise.
+    """
+    try:
+        app_logger.info("Loading queue state from vector database...")
+        global customer_queue, active_conversation
+        async with queue_lock:
+            # Clear existing queue in case of prior data
+            customer_queue.clear()
+            active_conversation = None
+            
+            # Load queue data
+            queue_data = await vector_db_service.retrieve_queue_state()
+            if queue_data.get("queue"):
+                customer_queue.extend(queue_data["queue"])
+                app_logger.info(f"Loaded {len(customer_queue)} customers into queue from database.")
+            else:
+                app_logger.info("No queue data found in database. Starting with empty queue.")
+                
+            # Load active conversation
+            if queue_data.get("active_conversation"):
+                active_conversation = queue_data["active_conversation"]
+                app_logger.info(f"Loaded active conversation: {active_conversation}")
+            else:
+                app_logger.info("No active conversation found in database.")
+                
+        return True
+    except Exception as e:
+        app_logger.error(f"Failed to load queue state from database: {str(e)}")
+        return False
+
+async def save_queue_state() -> bool:
+    """
+    Save the current queue state and active conversation to the vector database on shutdown or periodic updates.
+    Returns True if successful, False otherwise.
+    """
+    try:
+        app_logger.info("Saving queue state to vector database...")
+        async with queue_lock:
+            queue_list = list(customer_queue)
+            await vector_db_service.save_queue_state(queue_list, active_conversation)
+            app_logger.info(f"Saved queue state with {len(queue_list)} customers and active conversation: {active_conversation}")
+        return True
+    except Exception as e:
+        app_logger.error(f"Failed to save queue state to database: {str(e)}")
+        return False
 
 @app.on_event("startup")
 async def startup_event():
     """
     Initialize essential application services on startup with modularized operations.
-    Handles vector database setup, knowledge base indexing, and data cleanup with robust error handling.
+    Handles vector database setup, knowledge base indexing, data cleanup, and queue state loading with robust error handling.
     Ensures partial initialization does not prevent API from starting unless critical failures occur.
     Recreates the knowledge base collection at startup for a clean slate.
     """
@@ -356,14 +408,23 @@ async def startup_event():
         app_logger.warning("Orphaned history cleanup failed. Data integrity may be compromised but API remains functional.")
         startup_success = False
 
+    # Step 4: Load queue state from database (non-critical, can start with empty queue if fails)
+    if startup_success and not await load_queue_state():
+        app_logger.warning("Queue state loading failed. Starting with empty queue and no active conversation.")
+        startup_success = False
+
     # Finalize startup status
     if startup_success:
         app_logger.info("Startup completed successfully.")
     else:
         app_logger.warning("Startup completed with partial failures. Check logs for details.")
 
-
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean up resources and log the shutdown process for the Smart Assistant Backend."""
+    """Clean up resources, save queue state, and log the shutdown process for the Smart Assistant Backend."""
     app_logger.info("Shutting down Smart Assistant Backend...")
+    # Save queue state to database on shutdown
+    if not await save_queue_state():
+        app_logger.warning("Failed to save queue state during shutdown. Data may be lost on restart.")
+    else:
+        app_logger.info("Queue state saved successfully during shutdown.")

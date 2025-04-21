@@ -3,6 +3,7 @@ from app.models.schemas import UserMessageInput, ProcessingResultOutput, Operato
 from app.core.orchestrator import analyze_conversation, process_automated_agents
 from app.services.vector_db import vector_db_service
 from app.utils.logger import app_logger, log_message_processing, log_history_storage
+from app.main import customer_queue, active_conversation, queue_lock
 
 router = APIRouter()
 
@@ -14,6 +15,7 @@ router = APIRouter()
     Receives a user message and stores it in conversation history. QA and Summary Agents are NOT run automatically 
     and will only be triggered after the operator submits a response via `/submit_operator_response`. 
     Returns the `timestamp` for the stored message. Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
+    Adds customer to FIFO queue if they have unresponded messages.
     
     **Frontend Integration Notes**:
     - Use the returned `timestamp` to reference this message in subsequent `/analyze` or `/submit_operator_response` calls.
@@ -31,6 +33,7 @@ async def handle_process_message(
     Endpoint to store a user message for a customer identified by phone_number.
     Stores the message in history without running QA and Summary Agents.
     Rejects processing if no customer profile exists or phone number is invalid.
+    Adds customer to FIFO queue if they have unresponded messages.
     """
     try:
         log_message_processing(payload.phone_number, "STARTED", "Initiating message storage.")
@@ -58,6 +61,15 @@ async def handle_process_message(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to store user message for customer {payload.phone_number} at timestamp {timestamp}."
             )
+        
+        # Add customer to queue if not already in queue or active conversation
+        async with queue_lock:
+            if payload.phone_number not in customer_queue and payload.phone_number != active_conversation:
+                customer_queue.append(payload.phone_number)
+                app_logger.info(f"Added customer {payload.phone_number} to queue. Queue length: {len(customer_queue)}")
+                # Persist queue state to database
+                await vector_db_service.save_queue_state(list(customer_queue), active_conversation)
+                app_logger.info(f"Persisted queue state after adding {payload.phone_number}")
         
         log_history_storage(payload.phone_number, True, f"User message stored successfully at timestamp {timestamp}.")
         log_message_processing(payload.phone_number, "COMPLETED", "Message storage completed successfully. QA and Summary Agents will run after operator response.")
@@ -162,6 +174,7 @@ async def analyze_conversation_request(
     Submits the operator's response for a user message, updates conversation history using `timestamp`, 
     and triggers QA and Summary Agents to provide feedback based on the operator's response. 
     Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
+    If the customer is the active conversation, allows for updating history accordingly.
     
     **Frontend Integration Notes**:
     - Use the `timestamp` returned by `/process` to update the corresponding conversation turn with the operator's response.
@@ -177,9 +190,19 @@ async def submit_operator_response(
     Endpoint to update a conversation turn with the operator's response in history and trigger QA and Summary Agents.
     Identifies the turn using phone_number and timestamp.
     Rejects operation if no customer profile exists or phone number is invalid.
+    Checks if the customer is the active conversation.
     """
     try:
         log_message_processing(payload.phone_number, "STARTED", "Submitting operator response and triggering automated agents.")
+        async with queue_lock:
+            if active_conversation and active_conversation != payload.phone_number:
+                app_logger.warning(f"Operator is responding to {payload.phone_number} but active conversation is {active_conversation}.")
+                # Optionally enforce active conversation check
+                # raise HTTPException(
+                #     status_code=status.HTTP_400_BAD_REQUEST,
+                #     detail=f"Cannot respond to {payload.phone_number}. Active conversation is with {active_conversation}. Switch using /next_customer."
+                # )
+
         # Check if customer profile exists before updating history
         customer = await vector_db_service.retrieve_customer(payload.phone_number)
         if not customer:
@@ -350,4 +373,98 @@ async def trigger_automated_agents(phone_number: str, timestamp: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred while triggering automated agents for customer {phone_number} at timestamp {timestamp}: {str(e)}",
+        )
+
+@router.get(
+    "/next_customer",
+    response_model=dict,
+    summary="Fetch Next Customer from Queue",
+    description="""
+    Retrieves the next customer from the FIFO queue of customers with unresponded messages and sets them as the active conversation.
+    If no customers are in the queue, returns a message indicating the queue is empty.
+    Ensures only one customer is active at a time for the operator.
+    
+    **Frontend Integration Notes**:
+    - Use this endpoint when the operator finishes with the current customer to move to the next one in the queue.
+    - The returned `phone_number` becomes the active conversation for the operator to handle.
+    - If the queue is empty, display a message to the operator indicating no pending customers.
+    """,
+    status_code=status.HTTP_200_OK,
+)
+async def get_next_customer():
+    """
+    Endpoint to fetch the next customer from the FIFO queue and set them as the active conversation.
+    Updates the active_conversation state and removes the customer from the queue.
+    Returns the phone number of the next customer or a message if the queue is empty.
+    Persists the updated queue state to the database.
+    """
+    try:
+        async with queue_lock:
+            global active_conversation
+            if len(customer_queue) == 0:
+                app_logger.info("Queue is empty. No customers to process.")
+                return {
+                    "status": "empty",
+                    "message": "No customers in queue to process.",
+                    "phone_number": None
+                }
+            next_customer = customer_queue.popleft()
+            active_conversation = next_customer
+            app_logger.info(f"Assigned next customer {next_customer} as active conversation. Queue length: {len(customer_queue)}")
+            # Persist updated queue state to database
+            await vector_db_service.save_queue_state(list(customer_queue), active_conversation)
+            app_logger.info(f"Persisted queue state after assigning {next_customer} as active conversation")
+            return {
+                "status": "success",
+                "message": f"Customer {next_customer} is now the active conversation.",
+                "phone_number": next_customer
+            }
+    except Exception as e:
+        app_logger.error(f"Error fetching next customer from queue: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred while fetching the next customer: {str(e)}",
+        )
+
+@router.get(
+    "/queue_status",
+    response_model=dict,
+    summary="Get Queue Status",
+    description="""
+    Retrieves the current status of the customer queue, including the number of waiting customers and optionally a masked list of their phone numbers.
+    Provides feedback to the operator about the workload.
+    
+    **Frontend Integration Notes**:
+    - Use this endpoint to display the number of pending customers in the queue to the operator.
+    - The `queue_length` indicates how many customers are waiting for a response.
+    - The `waiting_customers` list provides partially masked phone numbers for privacy (e.g., 89****XX**).
+    - If an active conversation exists, it is included for reference.
+    """,
+    status_code=status.HTTP_200_OK,
+)
+async def get_queue_status():
+    """
+    Endpoint to fetch the current queue status, including queue length and a list of waiting customers with masked phone numbers.
+    Returns the active conversation if one exists.
+    """
+    try:
+        async with queue_lock:
+            queue_length = len(customer_queue)
+            # Mask phone numbers for privacy (show first 2 and last 2 digits, mask middle)
+            masked_customers = [
+                f"{phone[:2]}****{phone[-2:]}" for phone in customer_queue
+            ] if customer_queue else []
+            app_logger.info(f"Queue status requested: {queue_length} customers in queue, active conversation: {active_conversation if active_conversation else 'None'}")
+            response = {
+                "status": "success",
+                "queue_length": queue_length,
+                "waiting_customers": masked_customers,
+                "active_conversation": f"{active_conversation[:2]}****{active_conversation[-2:]}" if active_conversation else None
+            }
+            return response
+    except Exception as e:
+        app_logger.error(f"Error fetching queue status: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred while fetching queue status: {str(e)}",
         )

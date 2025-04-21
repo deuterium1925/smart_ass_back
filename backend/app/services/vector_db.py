@@ -9,7 +9,7 @@ from typing import List, Dict, Optional
 from app.models.schemas import Customer
 
 class VectorDBService:
-    """Manages interactions with Qdrant vector database for storing and retrieving knowledge base data, customer profiles, and conversation history."""
+    """Manages interactions with Qdrant vector database for storing and retrieving knowledge base data, customer profiles, conversation history, and queue state."""
     def __init__(self):
         self.settings = get_settings()
         self.client = QdrantClient(
@@ -20,13 +20,14 @@ class VectorDBService:
         self.collection_name = self.settings.KNOWLEDGE_COLLECTION_NAME
         self.history_collection_name = "conversation_history"
         self.customers_collection_name = "customers"
+        self.queue_collection_name = "queue_state"
         self.embedding_model = self.settings.EMBEDDING_MODEL
         self.vector_size = None  # Set dynamically after first embedding generation
         self.timeout = aiohttp.ClientTimeout(total=self.settings.REQUEST_TIMEOUT)
 
     async def ensure_collection(self):
         """
-        Ensures the existence of collections for knowledge base, conversation history, and customer profiles in Qdrant.
+        Ensures the existence of collections for knowledge base, conversation history, customer profiles, and queue state in Qdrant.
         Dynamically sets vector size based on embedding model and creates payload indexes on phone_number for efficient filtering.
         """
         try:
@@ -105,7 +106,6 @@ class VectorDBService:
                     )
                     app_logger.info(f"Added index on timestamp for {self.history_collection_name}")
 
-
             # Handle customers collection with index for fast retrieval by phone_number
             if self.customers_collection_name not in collection_names:
                 await asyncio.to_thread(
@@ -134,6 +134,17 @@ class VectorDBService:
                         field_type="keyword"
                     )
                     app_logger.info(f"Added index on phone_number for {self.customers_collection_name}")
+
+            # Handle queue state collection for persisting customer queue and active conversation
+            if self.queue_collection_name not in collection_names:
+                await asyncio.to_thread(
+                    self.client.create_collection,
+                    collection_name=self.queue_collection_name,
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
+                )
+                app_logger.info(f"Created collection {self.queue_collection_name} for queue state persistence")
+            else:
+                app_logger.debug(f"Collection {self.queue_collection_name} already exists")
         except Exception as e:
             app_logger.error(f"Error creating or retrieving collections in Qdrant: {e}")
 
@@ -480,6 +491,87 @@ class VectorDBService:
         except Exception as e:
             app_logger.error(f"Error retrieving customer profile for {phone_number}: {e}")
             return None
+
+    async def save_queue_state(self, queue: List[str], active_conversation: Optional[str]) -> bool:
+        """
+        Save the current queue state and active conversation to the queue_state collection.
+        Clears existing data and upserts a single point with the entire state.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            app_logger.debug("Saving queue state to Qdrant")
+            # Clear existing queue state data to avoid duplication or outdated entries
+            await asyncio.to_thread(
+                self.client.delete_collection,
+                collection_name=self.queue_collection_name
+            )
+            app_logger.debug(f"Deleted existing collection {self.queue_collection_name} for fresh state save")
+            # Recreate the collection
+            await asyncio.to_thread(
+                self.client.create_collection,
+                collection_name=self.queue_collection_name,
+                vectors_config=VectorParams(size=self.vector_size if self.vector_size else 1024, distance=Distance.COSINE)
+            )
+            app_logger.debug(f"Recreated collection {self.queue_collection_name} for queue state")
+
+            # Use a dummy vector since this is not for similarity search
+            dummy_vector = [0.0] * (self.vector_size if self.vector_size else 1024)
+            point_id = "queue_state_point"
+            point = PointStruct(
+                id=point_id,
+                vector=dummy_vector,
+                payload={
+                    "queue": queue,
+                    "active_conversation": active_conversation if active_conversation else ""
+                }
+            )
+            await asyncio.to_thread(
+                self.client.upsert,
+                collection_name=self.queue_collection_name,
+                points=[point]
+            )
+            app_logger.info(f"Successfully saved queue state with {len(queue)} customers and active conversation: {active_conversation}")
+            return True
+        except Exception as e:
+            app_logger.error(f"Error saving queue state to Qdrant: {e}")
+            return False
+
+    async def retrieve_queue_state(self) -> Dict[str, any]:
+        """
+        Retrieve the persisted queue state and active conversation from the queue_state collection.
+        Returns a dictionary with the queue list and active conversation.
+        If no data is found, returns an empty queue and no active conversation.
+        """
+        try:
+            app_logger.debug("Retrieving queue state from Qdrant")
+            search_result = await asyncio.to_thread(
+                self.client.scroll,
+                collection_name=self.queue_collection_name,
+                limit=1,
+                with_payload=True,
+                with_vectors=False
+            )
+            if search_result[0]:
+                payload = search_result[0][0].payload
+                queue = payload.get("queue", [])
+                active_conv = payload.get("active_conversation", "")
+                app_logger.info(f"Retrieved queue state with {len(queue)} customers and active conversation: {active_conv if active_conv else 'None'}")
+                return {
+                    "queue": queue,
+                    "active_conversation": active_conv if active_conv else None
+                }
+            else:
+                app_logger.info("No queue state found in Qdrant, returning empty state")
+                return {
+                    "queue": [],
+                    "active_conversation": None
+                }
+        except Exception as e:
+            app_logger.error(f"Error retrieving queue state from Qdrant: {e}")
+            return {
+                "queue": [],
+                "active_conversation": None
+            }
 
     async def delete_orphaned_history(self) -> int:
         """
