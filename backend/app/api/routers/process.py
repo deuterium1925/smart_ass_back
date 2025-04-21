@@ -183,12 +183,33 @@ async def analyze_conversation_request(
     """,
     status_code=status.HTTP_200_OK,
 )
+@router.post(
+    "/submit_operator_response",
+    response_model=dict,
+    summary="Submit Operator Response and Trigger Automated Agents",
+    description="""
+    Submits the operator's response for a user message, updates conversation history, 
+    and triggers QA and Summary Agents to provide feedback based on the operator's response. 
+    Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
+    If a specific `timestamp` is provided, updates that conversation turn; otherwise, auto-selects the most recent unanswered turn.
+    If no unanswered turns exist, creates a new turn for follow-up communication.
+    If the customer is the active conversation, allows for updating history accordingly.
+    
+    **Frontend Integration Notes**:
+    - Optionally provide `timestamp` (from `/process` or `/history`) to target a specific conversation turn. If omitted, the system selects the most recent unanswered message.
+    - If no unanswered messages exist, a new turn is created for follow-up communication.
+    - Ensure `phone_number` matches the customer profile and is in format `89XXXXXXXXX` (11 digits starting with 89) to avoid orphaned data or validation errors.
+    - After submission, QA and Summary results will be available in the response for immediate display. Update any placeholders or loading states with these results.
+    """,
+    status_code=status.HTTP_200_OK,
+)
 async def submit_operator_response(
     payload: OperatorResponseInput = Body(...)
 ):
     """
     Endpoint to update a conversation turn with the operator's response in history and trigger QA and Summary Agents.
-    Automatically identifies the most recent unanswered user message using phone_number.
+    Uses provided timestamp or auto-identifies the most recent unanswered user message using phone_number.
+    Creates a new turn if no unanswered messages exist and no timestamp is provided or if the specified turn already has a response.
     Rejects operation if no customer profile exists or phone number is invalid.
     Checks if the customer is the active conversation.
     """
@@ -197,7 +218,7 @@ async def submit_operator_response(
         async with queue_lock:
             if active_conversation and active_conversation != payload.phone_number:
                 app_logger.warning(f"Operator is responding to {payload.phone_number} but active conversation is {active_conversation}.")
-                # Optionally enforce active conversation check
+                # Optionally enforce active conversation check (disabled for flexibility)
                 # raise HTTPException(
                 #     status_code=status.HTTP_400_BAD_REQUEST,
                 #     detail=f"Cannot respond to {payload.phone_number}. Active conversation is with {active_conversation}. Switch using /next_customer."
@@ -212,29 +233,95 @@ async def submit_operator_response(
                 detail=f"Ошибка: Профиль клиента с номером телефона {payload.phone_number} не найден. Пожалуйста, создайте профиль перед обновлением истории."
             )
 
-        # Retrieve the most recent unanswered user message
-        unanswered_turn = await vector_db_service.get_latest_unanswered_turn(payload.phone_number)
-        if not unanswered_turn:
-            log_message_processing(payload.phone_number, "FAILED", "No unanswered user messages found.")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No unanswered user messages found for customer {payload.phone_number}."
-            )
+        timestamp = payload.timestamp
+        user_text = ""
+        history_data = await vector_db_service.retrieve_conversation_history(payload.phone_number, limit=50)
+        selected_turn = None
 
-        timestamp = unanswered_turn["timestamp"]
-        user_text = unanswered_turn["user_text"]
-        success = await vector_db_service.update_conversation_turn(
-            phone_number=payload.phone_number,
-            timestamp=timestamp,
-            operator_response=payload.operator_response
-        )
-        if not success:
-            log_history_storage(payload.phone_number, False, "Failed to update conversation turn with operator response.")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Failed to update conversation turn for customer {payload.phone_number} at timestamp {timestamp}."
-            )
-        log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
+        if timestamp:
+            # If timestamp is provided, find the specific turn
+            for entry in history_data:
+                if entry["timestamp"] == timestamp:
+                    selected_turn = entry
+                    break
+            if not selected_turn:
+                log_message_processing(payload.phone_number, "FAILED", f"Conversation turn not found for timestamp {timestamp}.")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Conversation turn not found for timestamp {timestamp} for customer {payload.phone_number}."
+                )
+            timestamp = selected_turn["timestamp"]
+            user_text = selected_turn["user_text"]
+            # If the turn already has a response, we'll create a new follow-up turn
+            if selected_turn["operator_response"].strip():
+                app_logger.info(f"Turn at timestamp {timestamp} for {payload.phone_number} already has a response. Creating new follow-up turn.")
+                from datetime import datetime, timezone
+                timestamp = datetime.now(timezone.utc).isoformat()
+                user_text = ""  # Empty user_text for follow-up turn initiated by operator
+                stored_timestamp = await vector_db_service.store_conversation_turn(
+                    phone_number=payload.phone_number,
+                    user_text=user_text,
+                    operator_response=payload.operator_response,
+                    timestamp=timestamp
+                )
+                if not stored_timestamp:
+                    log_history_storage(payload.phone_number, False, "Failed to store follow-up turn.")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to store follow-up turn for customer {payload.phone_number} at timestamp {timestamp}."
+                    )
+                log_history_storage(payload.phone_number, True, "Follow-up turn stored successfully.")
+            else:
+                # Update existing turn if no response exists
+                success = await vector_db_service.update_conversation_turn(
+                    phone_number=payload.phone_number,
+                    timestamp=timestamp,
+                    operator_response=payload.operator_response
+                )
+                if not success:
+                    log_history_storage(payload.phone_number, False, "Failed to update conversation turn with operator response.")
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Failed to update conversation turn for customer {payload.phone_number} at timestamp {timestamp}."
+                    )
+                log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
+        else:
+            # If no timestamp provided, auto-select the most recent unanswered turn
+            unanswered_turn = await vector_db_service.get_latest_unanswered_turn(payload.phone_number)
+            if unanswered_turn:
+                timestamp = unanswered_turn["timestamp"]
+                user_text = unanswered_turn["user_text"]
+                success = await vector_db_service.update_conversation_turn(
+                    phone_number=payload.phone_number,
+                    timestamp=timestamp,
+                    operator_response=payload.operator_response
+                )
+                if not success:
+                    log_history_storage(payload.phone_number, False, "Failed to update conversation turn with operator response.")
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Failed to update conversation turn for customer {payload.phone_number} at timestamp {timestamp}."
+                    )
+                log_history_storage(payload.phone_number, True, "Operator response updated successfully.")
+            else:
+                # If no unanswered turns, create a new follow-up turn
+                app_logger.info(f"No unanswered turns for {payload.phone_number}. Creating new follow-up turn.")
+                from datetime import datetime, timezone
+                timestamp = datetime.now(timezone.utc).isoformat()
+                user_text = ""  # Empty user_text for follow-up turn initiated by operator
+                stored_timestamp = await vector_db_service.store_conversation_turn(
+                    phone_number=payload.phone_number,
+                    user_text=user_text,
+                    operator_response=payload.operator_response,
+                    timestamp=timestamp
+                )
+                if not stored_timestamp:
+                    log_history_storage(payload.phone_number, False, "Failed to store follow-up turn.")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to store follow-up turn for customer {payload.phone_number} at timestamp {timestamp}."
+                    )
+                log_history_storage(payload.phone_number, True, "Follow-up turn stored successfully.")
 
         # Trigger automated agents (QA and Summary) after operator response
         automated_result = await process_automated_agents(
@@ -258,7 +345,7 @@ async def submit_operator_response(
         return {
             "status": "success",
             "message": "Operator response updated and automated agents processed successfully.",
-            "timestamp": timestamp,  # Return the identified timestamp for reference
+            "timestamp": timestamp,  # Return the identified or new timestamp for reference
             "automated_results": {
                 "summary": automated_result.get("summary", AgentResponse(
                     agent_name="SummaryAgent",
@@ -295,20 +382,21 @@ async def submit_operator_response(
     response_model=dict,
     summary="Manually Trigger Automated Agents",
     description="""
-    Manually triggers QA and Summary Agents for the most recent conversation turn if the operator response 
+    Manually triggers QA and Summary Agents for a specific conversation turn if the operator response 
     has not been submitted within a certain time frame. Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
+    Optionally accepts a `timestamp` query parameter to target a specific turn; otherwise, selects the most recent turn (prioritizing unanswered messages).
     
     **Frontend Integration Notes**:
     - Use this endpoint to trigger QA and Summary Agents manually if the operator response is delayed indefinitely.
-    - The system automatically selects the most recent conversation turn (prioritizing unanswered messages).
+    - Optionally provide `timestamp` as a query parameter to target a specific turn; if omitted, the system selects the most recent conversation turn.
     - Ensure `phone_number` is in format `89XXXXXXXXX` (11 digits starting with 89) before calling this endpoint to avoid validation errors.
     - Display the results once they are returned, updating any placeholders or loading states with QA and Summary feedback.
     """,
     status_code=status.HTTP_200_OK,
 )
-async def trigger_automated_agents(phone_number: str):
+async def trigger_automated_agents(phone_number: str, timestamp: Optional[str] = None):
     """
-    Endpoint to manually trigger QA and Summary Agents for the most recent conversation turn.
+    Endpoint to manually trigger QA and Summary Agents for a specific conversation turn or the most recent one.
     Useful for handling cases where operator response is delayed indefinitely.
     Rejects operation if no customer profile exists or if the conversation turn is not found or phone number is invalid.
     """
@@ -322,7 +410,7 @@ async def trigger_automated_agents(phone_number: str):
                 detail="Phone number must be 11 digits starting with '89' (format: 89XXXXXXXXX)."
             )
 
-        log_message_processing(cleaned_phone, "STARTED", "Manually triggering automated agents for the most recent turn.")
+        log_message_processing(cleaned_phone, "STARTED", f"Manually triggering automated agents for {'timestamp ' + timestamp if timestamp else 'the most recent turn'}.")
         # Check if customer profile exists
         customer = await vector_db_service.retrieve_customer(cleaned_phone)
         if not customer:
@@ -332,7 +420,7 @@ async def trigger_automated_agents(phone_number: str):
                 detail=f"Ошибка: Профиль клиента с номером телефона {cleaned_phone} не найден."
             )
 
-        # Retrieve history to find the most recent unanswered turn or fallback to latest turn
+        # Retrieve history to find the specific turn or most recent
         history_data = await vector_db_service.retrieve_conversation_history(cleaned_phone, limit=50)
         if not history_data:
             log_message_processing(cleaned_phone, "FAILED", "No conversation history found.")
@@ -341,14 +429,27 @@ async def trigger_automated_agents(phone_number: str):
                 detail=f"No conversation history found for customer {cleaned_phone}."
             )
 
-        # Select the most recent unanswered turn or the latest turn if all are answered
+        # Select turn based on provided timestamp or auto-select
         selected_turn = None
-        for entry in reversed(history_data):  # Most recent first
-            if entry["user_text"].strip() and not entry["operator_response"].strip():
-                selected_turn = entry
-                break
-        if not selected_turn:
-            selected_turn = history_data[-1]  # Fallback to the most recent turn if all answered
+        if timestamp:
+            for entry in history_data:
+                if entry["timestamp"] == timestamp:
+                    selected_turn = entry
+                    break
+            if not selected_turn:
+                log_message_processing(cleaned_phone, "FAILED", f"Conversation turn not found for timestamp {timestamp}.")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Conversation turn not found for timestamp {timestamp} for customer {cleaned_phone}. Suggestion: Fetch recent conversation history via /analyze to get the correct timestamp."
+                )
+        else:
+            # Select the most recent unanswered turn or the latest turn if all are answered
+            for entry in reversed(history_data):  # Most recent first
+                if entry["user_text"].strip() and not entry["operator_response"].strip():
+                    selected_turn = entry
+                    break
+            if not selected_turn:
+                selected_turn = history_data[-1]  # Fallback to the most recent turn if all answered
 
         timestamp = selected_turn["timestamp"]
         user_text = selected_turn["user_text"]
