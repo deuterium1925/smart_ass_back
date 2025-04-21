@@ -89,7 +89,8 @@ class VectorDBService:
                     self.client.get_collection,
                     collection_name=self.history_collection_name
                 )
-                if not any(index.field_name == "phone_number" for index in indexes.payload_schema.values()):
+                index_fields = [idx.field_name for idx in indexes.payload_schema.values()] if indexes.payload_schema else []
+                if "phone_number" not in index_fields:
                     await asyncio.to_thread(
                         self.client.create_payload_index,
                         collection_name=self.history_collection_name,
@@ -97,7 +98,7 @@ class VectorDBService:
                         field_type="keyword"
                     )
                     app_logger.info(f"Added index on phone_number for {self.history_collection_name}")
-                if not any(index.field_name == "timestamp" for index in indexes.payload_schema.values()):
+                if "timestamp" not in index_fields:
                     await asyncio.to_thread(
                         self.client.create_payload_index,
                         collection_name=self.history_collection_name,
@@ -126,7 +127,8 @@ class VectorDBService:
                     self.client.get_collection,
                     collection_name=self.customers_collection_name
                 )
-                if not any(index.field_name == "phone_number" for index in indexes.payload_schema.values()):
+                index_fields = [idx.field_name for idx in indexes.payload_schema.values()] if indexes.payload_schema else []
+                if "phone_number" not in index_fields:
                     await asyncio.to_thread(
                         self.client.create_payload_index,
                         collection_name=self.customers_collection_name,
@@ -501,11 +503,15 @@ class VectorDBService:
         try:
             app_logger.debug("Saving queue state to Qdrant")
             # Clear existing queue state data to avoid duplication or outdated entries
-            await asyncio.to_thread(
-                self.client.delete_collection,
-                collection_name=self.queue_collection_name
-            )
-            app_logger.debug(f"Deleted existing collection {self.queue_collection_name} for fresh state save")
+            try:
+                await asyncio.to_thread(
+                    self.client.delete_collection,
+                    collection_name=self.queue_collection_name
+                )
+                app_logger.debug(f"Deleted existing collection {self.queue_collection_name} for fresh state save")
+            except Exception as e:
+                app_logger.warning(f"Could not delete existing collection {self.queue_collection_name}: {str(e)}. Proceeding to recreate.")
+            
             # Recreate the collection
             await asyncio.to_thread(
                 self.client.create_collection,
@@ -568,6 +574,14 @@ class VectorDBService:
                 }
         except Exception as e:
             app_logger.error(f"Error retrieving queue state from Qdrant: {e}")
+            # If collection doesn't exist or other error, ensure it's created for future saves
+            if "not found" in str(e).lower():
+                app_logger.info(f"Creating queue_state collection as it does not exist")
+                await asyncio.to_thread(
+                    self.client.create_collection,
+                    collection_name=self.queue_collection_name,
+                    vectors_config=VectorParams(size=self.vector_size if self.vector_size else 1024, distance=Distance.COSINE)
+                )
             return {
                 "queue": [],
                 "active_conversation": None

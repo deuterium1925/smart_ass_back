@@ -154,30 +154,50 @@ async def initialize_vector_db(recreate_knowledge_collection: bool = True) -> bo
             )
             app_logger.info(f"Recreated collection {vector_db_service.collection_name} with vector size {vector_size}.")
 
-        # Log status of collections for diagnostic purposes
-        collection_info_knowledge = await asyncio.to_thread(
-            vector_db_service.client.get_collection,
-            collection_name=vector_db_service.collection_name
-        )
-        app_logger.info(f"Collection {vector_db_service.collection_name} status: {collection_info_knowledge.points_count} points")
-        
-        collection_info_history = await asyncio.to_thread(
-            vector_db_service.client.get_collection,
-            collection_name=vector_db_service.history_collection_name
-        )
-        app_logger.info(f"Collection {vector_db_service.history_collection_name} status: {collection_info_history.points_count} points")
-        
-        collection_info_customers = await asyncio.to_thread(
-            vector_db_service.client.get_collection,
-            collection_name=vector_db_service.customers_collection_name
-        )
-        app_logger.info(f"Collection {vector_db_service.customers_collection_name} status: {collection_info_customers.points_count} points")
-        
-        collection_info_queue = await asyncio.to_thread(
-            vector_db_service.client.get_collection,
-            collection_name=vector_db_service.queue_collection_name
-        )
-        app_logger.info(f"Collection {vector_db_service.queue_collection_name} status: {collection_info_queue.points_count} points")
+        # Log status of collections for diagnostic purposes with error handling
+        try:
+            collection_info_knowledge = await asyncio.to_thread(
+                vector_db_service.client.get_collection,
+                collection_name=vector_db_service.collection_name
+            )
+            app_logger.info(f"Collection {vector_db_service.collection_name} status: {collection_info_knowledge.points_count} points")
+        except Exception as e:
+            app_logger.error(f"Failed to retrieve status for collection {vector_db_service.collection_name}: {str(e)}")
+            
+        try:
+            collection_info_history = await asyncio.to_thread(
+                vector_db_service.client.get_collection,
+                collection_name=vector_db_service.history_collection_name
+            )
+            app_logger.info(f"Collection {vector_db_service.history_collection_name} status: {collection_info_history.points_count} points")
+        except Exception as e:
+            app_logger.error(f"Failed to retrieve status for collection {vector_db_service.history_collection_name}: {str(e)}")
+            
+        try:
+            collection_info_customers = await asyncio.to_thread(
+                vector_db_service.client.get_collection,
+                collection_name=vector_db_service.customers_collection_name
+            )
+            app_logger.info(f"Collection {vector_db_service.customers_collection_name} status: {collection_info_customers.points_count} points")
+        except Exception as e:
+            app_logger.error(f"Failed to retrieve status for collection {vector_db_service.customers_collection_name}: {str(e)}")
+            
+        try:
+            collection_info_queue = await asyncio.to_thread(
+                vector_db_service.client.get_collection,
+                collection_name=vector_db_service.queue_collection_name
+            )
+            app_logger.info(f"Collection {vector_db_service.queue_collection_name} status: {collection_info_queue.points_count} points")
+        except Exception as e:
+            app_logger.error(f"Failed to retrieve status for collection {vector_db_service.queue_collection_name}: {str(e)}")
+            # Ensure the collection is created if it doesn't exist
+            app_logger.info(f"Creating {vector_db_service.queue_collection_name} collection as it may not exist")
+            await asyncio.to_thread(
+                vector_db_service.client.create_collection,
+                collection_name=vector_db_service.queue_collection_name,
+                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
+            )
+            app_logger.info(f"Created collection {vector_db_service.queue_collection_name} after retrieval failure")
         
         app_logger.info("Vector database collections initialized successfully.")
         return True
