@@ -522,7 +522,7 @@ class VectorDBService:
 
             # Use a dummy vector since this is not for similarity search
             dummy_vector = [0.0] * (self.vector_size if self.vector_size else 1024)
-            point_id = "queue_state_point"
+            point_id = 1  # Use a simple integer ID for the point
             point = PointStruct(
                 id=point_id,
                 vector=dummy_vector,
