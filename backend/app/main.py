@@ -9,7 +9,7 @@ from qdrant_client.http.models import PointStruct, VectorParams, Distance
 import asyncio
 import hashlib
 from typing import List, Dict, Tuple, Optional
-from collections import deque
+from app.core.state import customer_queue, active_conversation, queue_lock
 
 settings = get_settings()
 
@@ -59,13 +59,6 @@ app = FastAPI(
 # Include API routers for processing and customer management
 app.include_router(process_router.router, prefix="/api/v1", tags=["Processing"])
 app.include_router(customers_router.router, prefix="/api/v1/customers", tags=["Customers"])
-
-# In-memory queue for customers with unresponded messages (FIFO)
-customer_queue = deque()
-# Active conversation state (phone_number of the current customer being handled)
-active_conversation = None
-# Lock for thread-safe queue operations
-queue_lock = asyncio.Lock()
 
 @app.get("/health", tags=["Health"])
 async def health_check():

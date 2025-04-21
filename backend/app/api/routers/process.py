@@ -3,7 +3,7 @@ from app.models.schemas import UserMessageInput, ProcessingResultOutput, Operato
 from app.core.orchestrator import analyze_conversation, process_automated_agents
 from app.services.vector_db import vector_db_service
 from app.utils.logger import app_logger, log_message_processing, log_history_storage
-from app.main import customer_queue, active_conversation, queue_lock
+from app.core.state import customer_queue, active_conversation, queue_lock
 
 router = APIRouter()
 
