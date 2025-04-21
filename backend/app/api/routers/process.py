@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, status, Body
+from typing import Optional  # Add this import
 from app.models.schemas import UserMessageInput, ProcessingResultOutput, OperatorResponseInput, AnalysisRequest, ProcessMessageResponse, AgentResponse
 from app.core.orchestrator import analyze_conversation, process_automated_agents
 from app.services.vector_db import vector_db_service
