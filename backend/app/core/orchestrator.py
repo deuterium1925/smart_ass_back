@@ -11,12 +11,13 @@ from app.utils.logger import app_logger, log_history_storage, log_history_retrie
 from app.services.vector_db import vector_db_service
 from app.core.config import get_settings
 
-async def process_automated_agents(phone_number: str, turn_id: str, user_text: str) -> Dict[str, Any]:
+async def process_automated_agents(phone_number: str, timestamp: str, user_text: str, operator_response: str = "") -> Dict[str, Any]:
     """
-    Run automated agents (QA and Summary) after a user message is stored.
+    Run automated agents (QA and Summary) after an operator submits a response or manually triggered.
     Returns results of automated agents for inclusion in the response.
+    Takes both user_text and operator_response to ensure contextual relevance.
     """
-    app_logger.info(f"Orchestrator: Running automated agents for customer {phone_number}, turn_id {turn_id}")
+    app_logger.info(f"Orchestrator: Running automated agents for customer {phone_number}, timestamp {timestamp}")
     settings = get_settings()
     timeout_seconds = settings.REQUEST_TIMEOUT
 
@@ -27,8 +28,8 @@ async def process_automated_agents(phone_number: str, turn_id: str, user_text: s
             if not customer_data:
                 app_logger.error(f"No customer data found for {phone_number}. Skipping automated agents.")
                 return {
-                    "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Customer profile not found."}, "confidence": 0.0, "error": "Customer profile not found."},
-                    "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "Customer profile not found."}, "confidence": 0.0, "error": "Customer profile not found."}
+                    "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Customer profile not found."}, "confidence": 0.0, "error": f"Customer profile not found for {phone_number}."},
+                    "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "Customer profile not found."}, "confidence": 0.0, "error": f"Customer profile not found for {phone_number}."}
                 }
 
             history_data = await vector_db_service.retrieve_conversation_history(phone_number, limit=10)
@@ -36,56 +37,56 @@ async def process_automated_agents(phone_number: str, turn_id: str, user_text: s
             app_logger.debug(f"Retrieved history for automated agents for customer {phone_number}: {len(history)} turns")
             log_history_retrieval(phone_number, len(history))
 
-            # Run automated agents concurrently
+            # Run automated agents concurrently with context of user text and operator response
             summary_task = asyncio.create_task(summary_agent.summarize_conversation(history, user_text))
-            qa_task = asyncio.create_task(qa_agent.check_quality(user_text, ""))
+            qa_task = asyncio.create_task(qa_agent.check_quality(user_text, operator_response))
 
             summary_result, qa_result = await asyncio.gather(summary_task, qa_task, return_exceptions=True)
 
             if isinstance(summary_result, Exception):
-                app_logger.error(f"Summary Agent failed for {phone_number}: {str(summary_result)}")
+                app_logger.error(f"Summary Agent failed for customer {phone_number} at timestamp {timestamp}: {str(summary_result)}")
                 summary_result = AgentResponse(
                     agent_name="SummaryAgent",
                     result={"summary": "Failed to generate summary."},
                     confidence=0.0,
-                    error=f"Agent failed: {str(summary_result)}"
+                    error=f"Agent failed for customer {phone_number} at timestamp {timestamp}: {str(summary_result)}"
                 )
             if isinstance(qa_result, Exception):
-                app_logger.error(f"QA Agent failed for {phone_number}: {str(qa_result)}")
+                app_logger.error(f"QA Agent failed for customer {phone_number} at timestamp {timestamp}: {str(qa_result)}")
                 qa_result = AgentResponse(
                     agent_name="QAAgent",
                     result={"feedback": "Failed to generate QA feedback."},
                     confidence=0.0,
-                    error=f"Agent failed: {str(qa_result)}"
+                    error=f"Agent failed for customer {phone_number} at timestamp {timestamp}: {str(qa_result)}"
                 )
 
-            app_logger.info(f"Orchestrator: Completed automated agents for customer {phone_number}")
+            app_logger.info(f"Orchestrator: Completed automated agents for customer {phone_number} at timestamp {timestamp}")
             return {
                 "summary": summary_result,
                 "qa_feedback": qa_result
             }
 
     except asyncio.TimeoutError as e:
-        app_logger.error(f"Timeout during automated agent processing for customer {phone_number} after {timeout_seconds}s")
+        app_logger.error(f"Timeout during automated agent processing for customer {phone_number} at timestamp {timestamp} after {timeout_seconds}s")
         return {
-            "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Timeout error."}, "confidence": 0.0, "error": f"Timeout after {timeout_seconds}s"},
-            "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "Timeout error."}, "confidence": 0.0, "error": f"Timeout after {timeout_seconds}s"}
+            "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Timeout error."}, "confidence": 0.0, "error": f"Timeout after {timeout_seconds}s for customer {phone_number} at timestamp {timestamp}"},
+            "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "Timeout error."}, "confidence": 0.0, "error": f"Timeout after {timeout_seconds}s for customer {phone_number} at timestamp {timestamp}"}
         }
     except Exception as e:
-        app_logger.error(f"Automated agent processing failed for customer {phone_number}: {e}")
+        app_logger.error(f"Automated agent processing failed for customer {phone_number} at timestamp {timestamp}: {e}")
         return {
-            "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Processing error."}, "confidence": 0.0, "error": str(e)},
-            "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "Processing error."}, "confidence": 0.0, "error": str(e)}
+            "summary": {"agent_name": "SummaryAgent", "result": {"summary": "Processing error."}, "confidence": 0.0, "error": f"Processing error for customer {phone_number} at timestamp {timestamp}: {str(e)}"},
+            "qa_feedback": {"agent_name": "QAAgent", "result": {"feedback": "Processing error."}, "confidence": 0.0, "error": f"Processing error for customer {phone_number} at timestamp {timestamp}: {str(e)}"}
         }
 
 async def analyze_conversation(payload: AnalysisRequest) -> ProcessingResultOutput:
     """
-    Analyze conversation history for a customer based on specific turn IDs or recent history.
+    Analyze conversation history for a customer based on specific timestamps or recent history.
     Orchestrates agent processing for intent, emotion, knowledge, and suggestions.
     Ensures dependencies are handled by running prerequisite agents (Intent, Emotion) before dependent agents (Action).
     """
     phone_number = payload.phone_number
-    turn_ids = payload.turn_ids
+    timestamps = payload.timestamps
     history_limit = payload.history_limit
     app_logger.info(f"Orchestrator: Analyzing conversation for customer {phone_number}")
     
@@ -103,24 +104,24 @@ async def analyze_conversation(payload: AnalysisRequest) -> ProcessingResultOutp
                     customer_data=None
                 )
 
-            # Retrieve conversation history based on turn_ids or limit
+            # Retrieve conversation history based on timestamps or limit
             history_data = await vector_db_service.retrieve_conversation_history(phone_number, limit=history_limit)
             history = [HistoryEntry(**entry) for entry in history_data] if history_data else []
             app_logger.debug(f"Retrieved history for customer {phone_number}: {len(history)} turns")
             log_history_retrieval(phone_number, len(history))
 
-            # Filter by specific turn_ids if provided
-            if turn_ids:
-                history = [entry for entry in history if entry.turn_id in turn_ids]
+            # Filter by specific timestamps if provided
+            if timestamps:
+                history = [entry for entry in history if entry.timestamp in timestamps]
                 if not history:
-                    app_logger.warning(f"No history found for specified turn_ids for customer {phone_number}")
+                    app_logger.warning(f"No history found for specified timestamps for customer {phone_number}")
                     return ProcessingResultOutput(
                         phone_number=phone_number,
-                        consolidated_output=f"Ошибка: Не найдено сообщений для указанных turn_ids.",
+                        consolidated_output=f"Ошибка: Не найдено сообщений для указанных timestamps для клиента {phone_number}.",
                         customer_data=customer_data,
                         conversation_history=[]
                     )
-                app_logger.debug(f"Filtered history to {len(history)} turns based on turn_ids for customer {phone_number}")
+                app_logger.debug(f"Filtered history to {len(history)} turns based on timestamps for customer {phone_number}")
 
             # Prepare batch user text for analysis (concatenate multiple messages)
             batch_user_text = ""
@@ -142,31 +143,31 @@ async def analyze_conversation(payload: AnalysisRequest) -> ProcessingResultOutp
             
             # Handle potential exceptions or timeouts per agent
             if isinstance(intent_result, Exception):
-                app_logger.error(f"Intent Agent failed for {phone_number}: {str(intent_result)}")
+                app_logger.error(f"Intent Agent failed for customer {phone_number}: {str(intent_result)}")
                 intent_result = AgentResponse(
                     agent_name="IntentAgent",
                     result={"intent": "unknown", "confidence": 0.0},
                     confidence=0.0,
-                    error=f"Agent failed: {str(intent_result)}"
+                    error=f"Agent failed for customer {phone_number}: {str(intent_result)}"
                 )
             if isinstance(emotion_result, Exception):
-                app_logger.error(f"Emotion Agent failed for {phone_number}: {str(emotion_result)}")
+                app_logger.error(f"Emotion Agent failed for customer {phone_number}: {str(emotion_result)}")
                 emotion_result = AgentResponse(
                     agent_name="EmotionAgent",
                     result={"emotion": "neutral", "confidence": 0.0},
                     confidence=0.0,
-                    error=f"Agent failed: {str(emotion_result)}"
+                    error=f"Agent failed for customer {phone_number}: {str(emotion_result)}"
                 )
             if isinstance(knowledge_result, Exception):
-                app_logger.error(f"Knowledge Agent failed for {phone_number}: {str(knowledge_result)}")
+                app_logger.error(f"Knowledge Agent failed for customer {phone_number}: {str(knowledge_result)}")
                 knowledge_result = AgentResponse(
                     agent_name="KnowledgeAgent",
                     result={"knowledge": [], "message": "Error processing knowledge query."},
                     confidence=0.0,
-                    error=f"Agent failed: {str(knowledge_result)}"
+                    error=f"Agent failed for customer {phone_number}: {str(knowledge_result)}"
                 )
             
-            app_logger.debug(f"Completed Independent Agents for analysis of {phone_number}")
+            app_logger.debug(f"Completed Independent Agents for analysis of customer {phone_number}")
             consolidated_output = f"Обработано: Намерение='{intent_result.result.get('intent', 'N/A')}', Эмоция='{emotion_result.result.get('emotion', 'N/A')}'"
 
             # Run dependent agent (Action Suggestion) using results from prerequisites
@@ -177,18 +178,18 @@ async def analyze_conversation(payload: AnalysisRequest) -> ProcessingResultOutp
 
             suggestions = await suggestions_task
             if isinstance(suggestions, Exception):
-                app_logger.error(f"Action Agent failed for {phone_number}: {str(suggestions)}")
+                app_logger.error(f"Action Agent failed for customer {phone_number}: {str(suggestions)}")
                 suggestions = []
 
-            # Summary and QA results are not re-run here as they are automated separately
+            # Summary and QA results are not re-run here as they are automated after operator response
             summary_result = AgentResponse(
                 agent_name="SummaryAgent",
-                result={"summary": "Summary not re-generated during operator-triggered analysis. Check automated results."},
+                result={"summary": "Summary not generated during operator-triggered analysis. Available after operator response or manual trigger."},
                 confidence=0.0
             )
             qa_result = AgentResponse(
                 agent_name="QAAgent",
-                result={"feedback": "QA feedback not re-generated during operator-triggered analysis. Check automated results."},
+                result={"feedback": "QA feedback not generated during operator-triggered analysis. Available after operator response or manual trigger."},
                 confidence=0.0
             )
 
@@ -204,7 +205,7 @@ async def analyze_conversation(payload: AnalysisRequest) -> ProcessingResultOutp
                 conversation_history=history,
                 history_storage_status=True,
                 customer_data=customer_data,
-                current_turn_id=history[-1].turn_id if history else None
+                current_timestamp=history[-1].timestamp if history else None
             )
             app_logger.info(f"Orchestrator: Completed analysis for customer {phone_number}")
             return output
@@ -213,13 +214,13 @@ async def analyze_conversation(payload: AnalysisRequest) -> ProcessingResultOutp
         app_logger.error(f"Timeout during agent analysis for customer {phone_number} after {timeout_seconds}s")
         return ProcessingResultOutput(
             phone_number=phone_number,
-            consolidated_output=f"Ошибка: истекло время ожидания анализа ({timeout_seconds} сек)",
+            consolidated_output=f"Ошибка: истекло время ожидания анализа ({timeout_seconds} сек) для клиента {phone_number}.",
             customer_data=None
         )
     except Exception as e:
         app_logger.error(f"Analysis orchestration failed for customer {phone_number}: {e}")
         return ProcessingResultOutput(
             phone_number=phone_number,
-            consolidated_output=f"Ошибка анализа: {str(e)}",
+            consolidated_output=f"Ошибка анализа для клиента {phone_number}: {str(e)}",
             customer_data=None
         )

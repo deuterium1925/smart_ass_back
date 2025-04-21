@@ -11,12 +11,14 @@ router = APIRouter()
     summary="Create or Update Customer Profile",
     description="""
     Creates or updates a customer profile using the phone number as a unique identifier. 
+    Phone number must be in the format `89XXXXXXXXX` (11 digits starting with 89). 
     Supports detailed personalization with customer attributes for agent analysis.
     
     **Frontend Integration Notes**:
     - A customer profile must be created before using `/process`, `/analyze`, or `/submit_operator_response` endpoints.
-    - Use `phone_number` as the primary key for all interactions with this API.
-    - Check `status` and `message` for operation success or error details to display to users if necessary.
+    - Use `phone_number` as the primary key for all interactions with this API, ensuring format `89XXXXXXXXX` to avoid validation errors.
+    - Check `status` and `message` for operation success or error details to display to users if necessary (e.g., validation failures or server errors).
+    - Ensure all operations involving customer data reference this profile creation step to maintain data consistency.
     """,
     status_code=status.HTTP_200_OK,
 )
@@ -26,6 +28,7 @@ async def create_customer(
     """
     Endpoint to create or update a customer profile in the Qdrant customers collection.
     Updates existing profiles if the phone number matches, with checks for data consistency.
+    Phone number is validated and normalized to format 89XXXXXXXXX.
     """
     try:
         # Check for existing customer profile
@@ -61,9 +64,16 @@ async def create_customer(
             phone_number=customer_data.phone_number,
             message="Customer profile created or updated successfully."
         )
+    except ValueError as ve:
+        log_customer_creation(customer_data.phone_number if hasattr(customer_data, 'phone_number') else "invalid_input", False, f"Validation error: {str(ve)}")
+        app_logger.error(f"Validation error for customer profile creation with phone number {customer_data.phone_number if hasattr(customer_data, 'phone_number') else 'invalid_input'}: {str(ve)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Validation error: {str(ve)}",
+        )
     except Exception as e:
-        log_customer_creation(customer_data.phone_number, False, f"Unexpected error: {str(e)}")
-        app_logger.error(f"Error creating/updating customer profile for {customer_data.phone_number}: {e}")
+        log_customer_creation(customer_data.phone_number if hasattr(customer_data, 'phone_number') else "unknown", False, f"Unexpected error: {str(e)}")
+        app_logger.error(f"Error creating/updating customer profile for {customer_data.phone_number if hasattr(customer_data, 'phone_number') else 'unknown'}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred: {str(e)}",
@@ -74,23 +84,33 @@ async def create_customer(
     response_model=CustomerRetrieveResponse,
     summary="Retrieve Customer Profile",
     description="""
-    Retrieves a customer profile using the provided phone number as the unique identifier. 
+    Retrieves a customer profile using the provided phone number as the unique identifier in format `89XXXXXXXXX`. 
     Returns null if no profile exists.
     
     **Frontend Integration Notes**:
     - Use this endpoint to fetch customer data for display or before processing messages to ensure a profile exists.
-    - Check `status` to determine if a customer was found (`success` or `not_found`) and handle accordingly in the UI.
+    - Ensure `phone_number` is in format `89XXXXXXXXX` (11 digits starting with 89) before calling this endpoint to avoid validation errors.
+    - Check `status` to determine if a customer was found (`success` or `not_found`) and handle accordingly in the UI (e.g., prompt for profile creation if not found).
     """,
     status_code=status.HTTP_200_OK,
 )
 async def retrieve_customer(phone_number: str):
     """
     Endpoint to fetch a customer profile from the Qdrant customers collection by phone number.
-    Returns null if no profile exists.
+    Returns null if no profile exists. Validates phone number format before processing.
     """
     try:
-        customer = await vector_db_service.retrieve_customer(phone_number)
-        log_customer_retrieval(phone_number, bool(customer))
+        # Normalize and validate phone number
+        cleaned_phone = ''.join(filter(str.isdigit, phone_number))
+        if len(cleaned_phone) != 11 or not cleaned_phone.startswith('89'):
+            log_customer_retrieval(phone_number, False)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number must be 11 digits starting with '89' (format: 89XXXXXXXXX)."
+            )
+
+        customer = await vector_db_service.retrieve_customer(cleaned_phone)
+        log_customer_retrieval(cleaned_phone, bool(customer))
         if customer:
             return CustomerRetrieveResponse(
                 status="success",
@@ -101,11 +121,67 @@ async def retrieve_customer(phone_number: str):
             return CustomerRetrieveResponse(
                 status="not_found",
                 customer=None,
-                message=f"No customer found with phone number {phone_number}."
+                message=f"No customer found with phone number {cleaned_phone}."
             )
+    except HTTPException as he:
+        log_customer_retrieval(phone_number, False)
+        app_logger.error(f"Validation error retrieving customer profile for {phone_number}: {he.detail}")
+        raise
     except Exception as e:
         log_customer_retrieval(phone_number, False)
         app_logger.error(f"Error retrieving customer profile for {phone_number}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}",
+        )
+
+@router.delete(
+    "/delete/{phone_number}",
+    response_model=dict,
+    summary="Delete Customer Profile and History",
+    description="""
+    Deletes a customer profile and all associated conversation history using the provided phone number as the unique identifier in format `89XXXXXXXXX`.
+    Ensures no history remains without a customer profile.
+    
+    **Frontend Integration Notes**:
+    - Use this endpoint to permanently delete a customer and their conversation history.
+    - Ensure `phone_number` is in format `89XXXXXXXXX` (11 digits starting with 89) before calling this endpoint to avoid validation errors.
+    - Check `status` and `message` for operation success or error details to display to users if necessary.
+    - Warn users that deletion is permanent and cannot be undone, affecting all associated data.
+    """,
+    status_code=status.HTTP_200_OK,
+)
+async def delete_customer(phone_number: str):
+    """
+    Endpoint to delete a customer profile and all associated history from Qdrant.
+    Enforces the relationship between customer and history by removing both.
+    Validates phone number format before processing.
+    """
+    try:
+        # Normalize and validate phone number
+        cleaned_phone = ''.join(filter(str.isdigit, phone_number))
+        if len(cleaned_phone) != 11 or not cleaned_phone.startswith('89'):
+            app_logger.error(f"Invalid phone number format for deletion: {phone_number}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number must be 11 digits starting with '89' (format: 89XXXXXXXXX)."
+            )
+
+        app_logger.info(f"Deleting customer profile and history for {cleaned_phone}")
+        success = await vector_db_service.delete_customer_and_history(cleaned_phone)
+        if not success:
+            app_logger.error(f"Failed to delete customer profile and history for {cleaned_phone}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No customer found with phone number {cleaned_phone} or deletion failed."
+            )
+        app_logger.info(f"Successfully deleted customer profile and history for {cleaned_phone}")
+        return {"status": "success", "message": f"Customer profile and associated history deleted for {cleaned_phone}."}
+    except HTTPException as he:
+        app_logger.error(f"Error deleting customer profile for {phone_number}: {str(he.detail)}")
+        raise
+    except Exception as e:
+        app_logger.error(f"Unexpected error deleting customer profile for {phone_number}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred: {str(e)}",

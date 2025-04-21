@@ -15,26 +15,43 @@ settings = get_settings()
 app = FastAPI(
     title="Smart Assistant Backend API",
     description="""
-    **Smart Assistant Backend API** is a multi-agent LLM system designed to support contact center operators by processing customer queries in real-time. 
-    This API facilitates interaction with customer data and dialogue history using phone numbers as unique identifiers. 
-    Key features include:
-    - **Customer Management**: Create and retrieve customer profiles with detailed attributes for personalized support via `/api/v1/customers/create` and `/api/v1/customers/retrieve/{phone_number}`.
-    - **Message Storage with Automated Analysis**: Store incoming user messages and automatically run Quality Assurance (QA) and Summary Agents to provide immediate feedback and conversation overviews via `/api/v1/process`.
-    - **On-Demand Conversation Analysis**: Allow operators to trigger analysis by Intent, Emotion, Knowledge, and Action Suggestion Agents for specific conversation turns or recent history via `/api/v1/analyze`. 
-      This endpoint supports batch processing of multiple messages for coherent analysis.
-    - **Personalization**: Integrate customer data (e.g., tariff plans, subscriptions) into agent suggestions for context-aware responses.
+    # Smart Assistant Backend API Documentation
 
-    **Workflow Overview**:
-    1. A customer profile must be created using `/api/v1/customers/create` before any message processing or history updates can occur.
-    2. Incoming user messages are stored via `/api/v1/process`, which also runs automated QA and Summary Agents in the background, returning their results for immediate reference.
-    3. Operators can request detailed analysis on-demand via `/api/v1/analyze`, targeting specific conversation turns or recent history. Dependent agents (e.g., Action Suggestion) automatically run prerequisite agents (e.g., Intent, Emotion) to ensure complete analysis.
-    4. Operator responses can be submitted to update conversation history via `/api/v1/submit_operator_response`.
+    **Overview**: The Smart Assistant Backend API is a multi-agent LLM system designed to support contact center operators by processing customer queries in real-time. This API enables interaction with customer data and conversation history using `phone_number` (format: `89XXXXXXXXX`) as the unique identifier for customers and `timestamp` (ISO 8601 format) for individual conversation turns. The system is designed to optimize operator workflows with personalized, context-aware suggestions and quality feedback.
 
-    **Frontend Integration Notes**:
-    - All endpoints require a valid `phone_number` as the customer identifier to ensure data consistency and integrity.
-    - The `/process` endpoint returns a `turn_id` for each stored message, which can be used in `/analyze` or `/submit_operator_response` calls.
-    - Automated results (QA, Summary) are provided immediately after message storage, while on-demand analysis (Intent, Emotion, Knowledge, Action) results are available via operator-triggered requests.
-    - Error messages are descriptive and status codes are used consistently (e.g., 400 for bad input, 500 for server errors) to aid in user-friendly error handling.
+    ## Key Features
+    - **Customer Management**: Create, retrieve, or delete customer profiles with detailed attributes for personalized support via `/api/v1/customers/create`, `/api/v1/customers/retrieve/{phone_number}`, and `/api/v1/customers/delete/{phone_number}`.
+    - **Message Storage**: Store incoming user messages via `/api/v1/process`, returning a `timestamp` to reference the conversation turn. QA and Summary Agents are triggered only after an operator response is submitted.
+    - **On-Demand Conversation Analysis**: Allow operators to trigger analysis by Intent, Emotion, Knowledge, and Action Suggestion Agents for specific conversation turns or recent history via `/api/v1/analyze`. This supports batch processing of multiple messages for coherent insights.
+    - **Operator Response with Automated Feedback**: Submit operator responses via `/api/v1/submit_operator_response`, triggering QA and Summary Agents for immediate feedback on the response quality and conversation summary.
+    - **Manual Agent Trigger**: Manually trigger QA and Summary Agents via `/api/v1/trigger_automated_agents/{phone_number}/{timestamp}` if an operator response is delayed indefinitely.
+    - **Personalization**: Integrate customer data (e.g., tariff plans, subscriptions) into agent suggestions for context-aware responses tailored to individual profiles.
+
+    ## Workflow Overview
+    1. **Profile Creation**: A customer profile must be created using `/api/v1/customers/create` before any message processing or history updates can occur. The `phone_number` must be in the format `89XXXXXXXXX` (11 digits starting with 89).
+    2. **Message Storage**: Incoming user messages are stored via `/api/v1/process`, returning a unique `timestamp` for the conversation turn. Automated QA and Summary Agents are **not run immediately** to ensure feedback is contextually relevant to operator input.
+    3. **On-Demand Analysis**: Operators can request detailed analysis on-demand via `/api/v1/analyze`, targeting specific conversation turns (via `timestamps`) or recent history (via `history_limit`). Dependent agents (e.g., Action Suggestion) automatically run prerequisite agents (e.g., Intent, Emotion) for complete analysis.
+    4. **Operator Response Submission**: Operator responses are submitted via `/api/v1/submit_operator_response`, triggering QA and Summary Agents to provide feedback and summaries based on the operator's input for the specified `timestamp`.
+    5. **Manual Trigger for Delays**: If an operator response is delayed, QA and Summary Agents can be manually triggered via `/api/v1/trigger_automated_agents/{phone_number}/{timestamp}` to generate feedback without waiting for operator input.
+
+    ## Frontend Integration Notes
+    - **Strict Phone Number Format Enforcement**: The API strictly enforces the phone number format `89XXXXXXXXX` (11 digits starting with 89). International formats or other variations will be rejected with a HTTP 400 error. Ensure frontend input validation aligns with this requirement to avoid errors.
+    - **Timestamp Identifier**: The `/process` endpoint returns a `timestamp` (ISO 8601 format, UTC) for each stored message, which must be used in `/analyze`, `/submit_operator_response`, or `/trigger_automated_agents` calls to reference specific conversation turns.
+    - **Delayed Automated Results**: Automated results (QA, Summary) are provided **only after operator response submission** or manual triggering via `/trigger_automated_agents`. Frontend UIs must display placeholders or loading states for these results until they are available.
+    - **Error Handling**: Error messages are descriptive and reference `phone_number` and `timestamp` for traceability. Status codes are used consistently (e.g., 400 for bad input like invalid phone number format, 404 for not found, 500 for server errors) to facilitate user-friendly error handling.
+    - **Loading States and Triggers**: For seamless user experience, implement placeholders or loading states for QA and Summary feedback after storing a message via `/process`. Update these states once results are available via `/submit_operator_response` or `/trigger_automated_agents`. Consider polling or WebSocket integration if real-time updates are needed for delayed operator responses.
+
+    ## API Endpoints Summary
+    - **POST /api/v1/customers/create**: Create or update a customer profile with a normalized phone number (`89XXXXXXXXX`).
+    - **GET /api/v1/customers/retrieve/{phone_number}**: Retrieve a customer profile by phone number.
+    - **DELETE /api/v1/customers/delete/{phone_number}**: Delete a customer profile and all associated history.
+    - **POST /api/v1/process**: Store a user message and return a `timestamp` for the turn (QA/Summary delayed).
+    - **POST /api/v1/analyze**: Analyze conversation history for actionable insights (Intent, Emotion, Knowledge, Suggestions).
+    - **POST /api/v1/submit_operator_response**: Submit operator response for a turn, triggering QA and Summary feedback.
+    - **POST /api/v1/trigger_automated_agents/{phone_number}/{timestamp}**: Manually trigger QA and Summary Agents if operator response is delayed.
+    - **GET /health**: Check API operational status.
+
+    For detailed endpoint specifications, parameters, and response formats, refer to the interactive Swagger UI at `/docs` or Redoc at `/redoc`.
     """,
 )
 
@@ -44,18 +61,18 @@ app.include_router(customers_router.router, prefix="/api/v1/customers", tags=["C
 
 @app.get("/health", tags=["Health"])
 async def health_check():
-    """Verify the API's operational status with a simple health check."""
+    """Verify the API's operational status with a simple health check endpoint."""
     return {"status": "ok"}
 
 def compute_content_hash(entry: Dict) -> str:
-    """Compute a unique hash of a knowledge base entry's content for versioning and comparison."""
+    """Compute a unique hash of a knowledge base entry's content for versioning and comparison purposes."""
     content = f"{entry.get('query', '')}{entry.get('correct_answer', '')}{entry.get('correct_sources', '')}"
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
 async def generate_embeddings_batch(entries: List[Dict], batch_size: int = 50, max_concurrent_batches: int = 5) -> List[Tuple[Dict, List[float]]]:
     """
     Generate embeddings for knowledge base entries in parallel batches to optimize performance.
-    Uses a semaphore to limit the number of concurrent batches to avoid rate limiting.
+    Uses a semaphore to limit concurrent batches and avoid rate limiting issues.
     """
     results = []
     semaphore = asyncio.Semaphore(max_concurrent_batches)
@@ -87,8 +104,8 @@ async def generate_embeddings_batch(entries: List[Dict], batch_size: int = 50, m
 
 async def upsert_batch_to_qdrant(points: List[PointStruct], batch_size: int = 200):
     """
-    Upsert points to Qdrant vector database in larger batches for efficient storage.
-    Increased batch size to reduce network overhead.
+    Upsert points to Qdrant vector database in batches for efficient storage.
+    Uses a larger batch size to reduce network overhead during indexing.
     """
     for i in range(0, len(points), batch_size):
         batch = points[i:i + batch_size]
@@ -100,7 +117,7 @@ async def upsert_batch_to_qdrant(points: List[PointStruct], batch_size: int = 20
         app_logger.info(f"Upserted batch {i // batch_size + 1} with {len(batch)} points to Qdrant.")
 
 async def get_existing_points() -> Dict[str, Dict]:
-    """Retrieve existing points from Qdrant to compare with current knowledge base entries."""
+    """Retrieve existing points from Qdrant to compare with current knowledge base entries for incremental indexing."""
     existing_points = {}
     offset = None
     batch_size = 1000
@@ -111,7 +128,7 @@ async def get_existing_points() -> Dict[str, Dict]:
             limit=batch_size,
             offset=offset,
             with_payload=True,
-            with_vectors=False
+            with_vectors=False  # Optimization: Avoid retrieving vectors as they are not needed for comparison
         )
         points, next_offset = result
         for point in points:
@@ -128,27 +145,27 @@ async def get_existing_points() -> Dict[str, Dict]:
 @app.on_event("startup")
 async def startup_event():
     """
-    Initialize application services on startup, including vector database collections and
-    incremental indexing of the knowledge base to support real-time query processing by agents.
-    Implements smart indexing by only updating new or changed entries to optimize performance.
-    Forces reindexing if critical entries are missing.
+    Initialize application services on startup, including vector database collections and incremental
+    indexing of the knowledge base to support real-time query processing by agents.
+    Implements smart indexing by updating only new or changed entries for efficiency.
+    Forces reindexing if critical entries are missing and enforces strict cleanup of orphaned history.
     """
     app_logger.info("Starting up Smart Assistant Backend...")
     await vector_db_service.ensure_collection()
 
     try:
-        # Log status of knowledge base collection
+        # Log status of knowledge base collection for diagnostic purposes
         collection_info_knowledge = await asyncio.to_thread(
             vector_db_service.client.get_collection,
             collection_name=vector_db_service.collection_name
         )
         app_logger.info(f"Collection {vector_db_service.collection_name} status: {collection_info_knowledge.points_count} points")
 
-        # Check for critical knowledge base entry (e.g., 'кион') for debugging with case-insensitive search approximation
+        # Check for critical knowledge base entry (e.g., 'кион') for debugging with broader search
         search_result = await asyncio.to_thread(
             vector_db_service.client.scroll,
             collection_name=vector_db_service.collection_name,
-            limit=100,  # Broader search to handle case or minor text mismatches
+            limit=100,  # Broader search to handle minor mismatches
             with_payload=True,
             with_vectors=False
         )
@@ -156,12 +173,12 @@ async def startup_event():
         for point in search_result[0]:
             query_text = point.payload.get("query", "").lower()
             if "кион" in query_text or "kion" in query_text:
-                app_logger.info(f"Found 'кион/KION' related entry in Qdrant: {point.payload}")
+                app_logger.info(f"Found 'кион/KION' related entry in Qdrant: {point.payload.get('query', 'Unknown')}")
                 kion_found = True
         if not kion_found:
             app_logger.warning("Did not find any 'кион/KION' related entries in Qdrant. Forcing reindexing of knowledge base.")
 
-            # Force reindexing by clearing the collection and re-adding all entries
+            # Force reindexing by clearing the collection and re-adding all entries if critical data is missing
             app_logger.info(f"Clearing collection {vector_db_service.collection_name} to force reindexing.")
             await asyncio.to_thread(
                 vector_db_service.client.delete_collection,
@@ -177,35 +194,35 @@ async def startup_event():
             )
             app_logger.info(f"Recreated collection {vector_db_service.collection_name} for forced reindexing.")
 
-        # Log status of conversation history collection
+        # Log status of conversation history collection for diagnostic purposes
         collection_info_history = await asyncio.to_thread(
             vector_db_service.client.get_collection,
             collection_name=vector_db_service.history_collection_name
         )
         app_logger.info(f"Collection {vector_db_service.history_collection_name} status: {collection_info_history.points_count} points")
 
-        # Log status of customer profiles collection
+        # Log status of customer profiles collection for diagnostic purposes
         collection_info_customers = await asyncio.to_thread(
             vector_db_service.client.get_collection,
             collection_name=vector_db_service.customers_collection_name
         )
         app_logger.info(f"Collection {vector_db_service.customers_collection_name} status: {collection_info_customers.points_count} points")
 
-        # Perform cleanup of orphaned history entries to maintain data integrity
-        app_logger.info("Performing cleanup of orphaned conversation history entries...")
+        # Perform strict cleanup of orphaned history entries to ensure data integrity
+        app_logger.info("Performing strict cleanup of orphaned conversation history entries to enforce customer-history relationship...")
         deleted_count = await vector_db_service.delete_orphaned_history()
-        app_logger.info(f"Cleanup completed: {deleted_count} orphaned history entries deleted.")
+        app_logger.info(f"Strict cleanup completed: {deleted_count} orphaned history entries deleted.")
 
         # Log the total number of knowledge base entries loaded for indexing
         app_logger.info(f"Loaded {len(KNOWLEDGE_BASE)} knowledge base entries for indexing.")
 
-        # Log specific entries related to 'кион' for debugging
+        # Log specific entries related to 'кион' for debugging purposes
         kion_entries = [entry for entry in KNOWLEDGE_BASE if "кион" in entry.get("query", "").lower() or "kion" in entry.get("query", "").lower()]
         app_logger.info(f"Found {len(kion_entries)} entries related to 'кион/KION' in KNOWLEDGE_BASE")
         for i, entry in enumerate(kion_entries):
             app_logger.debug(f"Kion Entry {i+1}: Query='{entry['query']}', Content Preview='{entry['correct_answer'][:100]}...'")
 
-        # Implement incremental indexing to update only new or changed knowledge base entries
+        # Implement incremental indexing to update only new or changed knowledge base entries for efficiency
         app_logger.info("Starting incremental indexing of knowledge base...")
         existing_points = await get_existing_points()
 
@@ -219,7 +236,7 @@ async def startup_event():
             content_hash = compute_content_hash(entry)
             kb_hashes[point_id] = content_hash
             
-            # Add to index list if new or updated (or force reindex if 'кион' related)
+            # Add to index list if new, updated, or critical (e.g., 'кион' related)
             if point_id not in existing_points or "кион" in query_text.lower() or "kion" in query_text.lower():
                 app_logger.debug(f"Indexing item (new or critical): {query_text[:30]}... (ID: {point_id})")
                 to_index.append(entry)
@@ -276,7 +293,7 @@ async def startup_event():
         else:
             app_logger.info("No new or updated items to index. Skipping embedding and upsert steps.")
 
-        # Log outdated points but do not delete them to prevent potential data loss
+        # Log outdated points but do not delete them to prevent potential data loss in knowledge base
         outdated_points = []
         for point_id in existing_points:
             if point_id not in kb_hashes:
@@ -287,7 +304,7 @@ async def startup_event():
         else:
             app_logger.info("No potentially outdated points found in Qdrant.")
 
-        # Final check post-indexing for critical entries with broader search
+        # Final check post-indexing for critical entries with broader search to ensure data integrity
         search_result_post = await asyncio.to_thread(
             vector_db_service.client.scroll,
             collection_name=vector_db_service.collection_name,
@@ -299,7 +316,7 @@ async def startup_event():
         for point in search_result_post[0]:
             query_text = point.payload.get("query", "").lower()
             if "кион" in query_text or "kion" in query_text:
-                app_logger.info(f"Post-indexing check: Found 'кион/KION' related entry in Qdrant: {point.payload}")
+                app_logger.info(f"Post-indexing check: Found 'кион/KION' related entry in Qdrant: {point.payload.get('query', 'Unknown')}")
                 kion_found_post = True
         if not kion_found_post:
             app_logger.error("Post-indexing check failed: No 'кион/KION' related entries found in Qdrant even after reindexing. Check embedding generation, storage logic, or KNOWLEDGE_BASE content.")
@@ -311,5 +328,5 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean up resources and log shutdown process for the Smart Assistant Backend."""
+    """Clean up resources and log the shutdown process for the Smart Assistant Backend."""
     app_logger.info("Shutting down Smart Assistant Backend...")

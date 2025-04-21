@@ -9,7 +9,7 @@ from typing import List, Dict, Optional
 from app.models.schemas import Customer
 
 class VectorDBService:
-    """Manages interactions with Qdrant vector database for storing and retrieving knowledge, history, and customer data."""
+    """Manages interactions with Qdrant vector database for storing and retrieving knowledge base data, customer profiles, and conversation history."""
     def __init__(self):
         self.settings = get_settings()
         self.client = QdrantClient(
@@ -21,19 +21,19 @@ class VectorDBService:
         self.history_collection_name = "conversation_history"
         self.customers_collection_name = "customers"
         self.embedding_model = self.settings.EMBEDDING_MODEL
-        self.vector_size = None  # Set dynamically after first embedding
+        self.vector_size = None  # Set dynamically after first embedding generation
         self.timeout = aiohttp.ClientTimeout(total=self.settings.REQUEST_TIMEOUT)
 
     async def ensure_collection(self):
         """
-        Ensures the existence of collections for knowledge, history, and customers in Qdrant.
-        Dynamically sets vector size and creates payload indexes on phone_number for faster filtering.
+        Ensures the existence of collections for knowledge base, conversation history, and customer profiles in Qdrant.
+        Dynamically sets vector size based on embedding model and creates payload indexes on phone_number for efficient filtering.
         """
         try:
             collections = await asyncio.to_thread(self.client.get_collections)
             collection_names = [c.name for c in collections.collections]
 
-            # Handle knowledge base collection
+            # Handle knowledge base collection for storing domain-specific information
             if self.collection_name not in collection_names:
                 if self.vector_size is None:
                     app_logger.info("Vector size not set, generating a sample embedding to determine dimension...")
@@ -43,7 +43,7 @@ class VectorDBService:
                         app_logger.info(f"Determined vector size: {self.vector_size}")
                     else:
                         app_logger.error("Failed to generate sample embedding, defaulting to 1024")
-                        self.vector_size = 1024  # Fallback value
+                        self.vector_size = 1024  # Fallback vector size if embedding fails
 
                 await asyncio.to_thread(
                     self.client.create_collection,
@@ -61,7 +61,7 @@ class VectorDBService:
                     self.vector_size = collection_info.config.params.vectors.size
                     app_logger.info(f"Retrieved vector size from existing collection: {self.vector_size}")
 
-            # Handle conversation history collection with index for efficient lookups
+            # Handle conversation history collection with index for efficient lookups by phone_number
             if self.history_collection_name not in collection_names:
                 await asyncio.to_thread(
                     self.client.create_collection,
@@ -77,7 +77,7 @@ class VectorDBService:
                 app_logger.info(f"Created collection {self.history_collection_name} with index on phone_number")
             else:
                 app_logger.debug(f"Collection {self.history_collection_name} already exists")
-                # Ensure index exists for backward compatibility
+                # Ensure index exists for performance optimization
                 indexes = await asyncio.to_thread(
                     self.client.get_collection,
                     collection_name=self.history_collection_name
@@ -91,7 +91,7 @@ class VectorDBService:
                     )
                     app_logger.info(f"Added index on phone_number for {self.history_collection_name}")
 
-            # Handle customers collection with index for efficient retrieval
+            # Handle customers collection with index for fast retrieval by phone_number
             if self.customers_collection_name not in collection_names:
                 await asyncio.to_thread(
                     self.client.create_collection,
@@ -185,14 +185,15 @@ class VectorDBService:
         return None
 
     def generate_point_id(self, query_text: str, content_text: str = "") -> str:
-        """Generate a unique ID for Qdrant points using a hash of query and content text."""
+        """Generate a unique ID for Qdrant points using a hash of query and content text for uniqueness."""
         combined = query_text + content_text
         return hashlib.md5(combined.encode('utf-8')).hexdigest()
 
     async def query_vector_db(self, query_text: str, top_k: int = 3) -> List[Dict]:
         """
-        Query the vector DB for relevant documents based on text similarity.
+        Query the vector DB for relevant documents based on text similarity for knowledge retrieval.
         Returns a list of matched documents with content and relevance scores for the Knowledge Agent.
+        Optimized to retrieve only necessary payload fields.
         """
         try:
             app_logger.debug(f"Querying Vector DB for: {query_text[:30]}...")
@@ -227,14 +228,16 @@ class VectorDBService:
     async def store_conversation_turn(self, phone_number: str, user_text: str, operator_response: str = "", timestamp: str = "") -> Optional[str]:
         """
         Store a conversation turn in the history collection for long-term memory.
-        Validates customer existence to prevent orphaned entries. Returns the turn_id if successful, None otherwise.
+        Validates customer existence to prevent orphaned entries. Returns the timestamp if successful, None otherwise.
+        Strictly enforces that a customer profile must exist before storing any history.
+        Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
         """
         if not phone_number:
             app_logger.error("No phone number provided for storing conversation turn")
             return None
 
         try:
-            # Ensure customer exists before storing history
+            # Strictly enforce customer existence before storing history
             customer = await self.retrieve_customer(phone_number)
             if not customer:
                 app_logger.error(f"Cannot store turn: No customer found with phone number {phone_number}")
@@ -247,17 +250,16 @@ class VectorDBService:
                 app_logger.error(f"Failed to generate embedding for turn for customer {phone_number}")
                 return None
 
-            turn_id = hashlib.md5(f"{phone_number}_{timestamp}_{user_text}".encode('utf-8')).hexdigest()
+            point_id = hashlib.md5(f"{phone_number}_{timestamp}_{user_text}".encode('utf-8')).hexdigest()
             point = PointStruct(
-                id=turn_id,
+                id=point_id,
                 vector=embedding,
                 payload={
                     "phone_number": phone_number,
                     "user_text": user_text,
                     "operator_response": operator_response,
                     "timestamp": timestamp,
-                    "content": content,
-                    "turn_id": turn_id
+                    "content": content
                 }
             )
             await asyncio.to_thread(
@@ -265,29 +267,38 @@ class VectorDBService:
                 collection_name=self.history_collection_name,
                 points=[point]
             )
-            app_logger.info(f"Stored conversation turn for customer {phone_number} with turn_id {turn_id}")
-            return turn_id
+            app_logger.info(f"Stored conversation turn for customer {phone_number} at timestamp {timestamp}")
+            return timestamp
         except Exception as e:
-            app_logger.error(f"Error storing conversation turn for customer {phone_number}: {e}")
+            app_logger.error(f"Error storing conversation turn for customer {phone_number} at timestamp {timestamp}: {e}")
             return None
 
-    async def update_conversation_turn(self, phone_number: str, turn_id: str, operator_response: str) -> bool:
+    async def update_conversation_turn(self, phone_number: str, timestamp: str, operator_response: str) -> bool:
         """
-        Update a conversation turn with the operator's response using phone_number and turn_id.
+        Update a conversation turn with the operator's response using phone_number and timestamp.
         Returns True if successful, False otherwise.
+        Strictly enforces that a customer profile must exist before updating history.
+        Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
+        Optimized to retrieve only necessary data during search.
         """
-        if not phone_number or not turn_id:
-            app_logger.error("No phone number or turn_id provided for updating conversation turn")
+        if not phone_number or not timestamp:
+            app_logger.error("No phone number or timestamp provided for updating conversation turn")
             return False
 
         try:
+            # Strictly enforce customer existence before updating history
+            customer = await self.retrieve_customer(phone_number)
+            if not customer:
+                app_logger.error(f"Cannot update turn: No customer found with phone number {phone_number}")
+                return False
+
             search_result = await asyncio.to_thread(
                 self.client.scroll,
                 collection_name=self.history_collection_name,
                 scroll_filter={
                     "must": [
                         {"key": "phone_number", "match": {"value": phone_number}},
-                        {"key": "turn_id", "match": {"value": turn_id}}
+                        {"key": "timestamp", "match": {"value": timestamp}}
                     ]
                 },
                 limit=1,
@@ -295,16 +306,15 @@ class VectorDBService:
                 with_vectors=True
             )
             if not search_result[0]:
-                app_logger.error(f"No conversation turn found for customer {phone_number} with turn_id {turn_id}")
+                app_logger.error(f"No conversation turn found for customer {phone_number} at timestamp {timestamp}")
                 return False
 
             point = search_result[0][0]
             user_text = point.payload.get("user_text", "")
-            timestamp = point.payload.get("timestamp", "")
             content = f"User: {user_text}\nOperator: {operator_response}"
             embedding = await self.get_embedding(content)
             if embedding is None:
-                app_logger.error(f"Failed to generate updated embedding for turn for customer {phone_number}")
+                app_logger.error(f"Failed to generate updated embedding for turn for customer {phone_number} at timestamp {timestamp}")
                 return False
 
             updated_point = PointStruct(
@@ -315,8 +325,7 @@ class VectorDBService:
                     "user_text": user_text,
                     "operator_response": operator_response,
                     "timestamp": timestamp,
-                    "content": content,
-                    "turn_id": turn_id
+                    "content": content
                 }
             )
             await asyncio.to_thread(
@@ -324,16 +333,19 @@ class VectorDBService:
                 collection_name=self.history_collection_name,
                 points=[updated_point]
             )
-            app_logger.info(f"Updated conversation turn with operator response for customer {phone_number} with turn_id {turn_id}")
+            app_logger.info(f"Updated conversation turn with operator response for customer {phone_number} at timestamp {timestamp}")
             return True
         except Exception as e:
-            app_logger.error(f"Error updating conversation turn for customer {phone_number}: {e}")
+            app_logger.error(f"Error updating conversation turn for customer {phone_number} at timestamp {timestamp}: {e}")
             return False
 
     async def retrieve_conversation_history(self, phone_number: str, limit: int = 10) -> List[Dict]:
         """
         Retrieve conversation history for a customer by phone_number, limited to recent turns.
-        Validates customer existence and uses indexed field for performance. Sorts by timestamp.
+        Validates customer existence and uses indexed field for performance. Sorts by timestamp for chronological order.
+        Returns an empty list if no customer profile exists.
+        Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
+        Optimized to avoid retrieving unnecessary vector data.
         """
         if not phone_number:
             app_logger.error("No phone number provided for retrieving conversation history")
@@ -353,7 +365,7 @@ class VectorDBService:
                 scroll_filter={"must": [{"key": "phone_number", "match": {"value": phone_number}}]},
                 limit=limit,
                 with_payload=True,
-                with_vectors=False
+                with_vectors=False  # Optimization: Avoid retrieving vectors as they are not needed for history display
             )
             history = [
                 {
@@ -361,7 +373,6 @@ class VectorDBService:
                     "user_text": point.payload.get("user_text", ""),
                     "operator_response": point.payload.get("operator_response", ""),
                     "timestamp": point.payload.get("timestamp", ""),
-                    "turn_id": point.payload.get("turn_id", ""),
                     # Role logic: assistant if operator response exists, else user if user text exists
                     "role": (
                         "assistant" if point.payload.get("operator_response", "").strip()
@@ -390,9 +401,9 @@ class VectorDBService:
     async def upsert_customer(self, customer: Customer) -> bool:
         """
         Upsert a customer profile into the customers collection for personalized agent responses.
-        Uses a dummy vector since retrieval is based on exact match via payload index.
+        Uses a dummy vector since retrieval is based on exact match via payload index for efficiency.
         Returns True if successful, False otherwise.
-        Stores customer data without an embedding since retrieval is based on exact phone_number match.
+        Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
         """
         try:
             app_logger.debug(f"Upserting customer profile for {customer.phone_number}")
@@ -421,6 +432,8 @@ class VectorDBService:
         """
         Retrieve a customer profile by phone_number using indexed field for fast lookup.
         Returns Customer object if found, None otherwise.
+        Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
+        Optimized to avoid retrieving unnecessary vector data.
         """
         if not phone_number:
             app_logger.error("No phone number provided for retrieving customer profile")
@@ -434,7 +447,7 @@ class VectorDBService:
                 scroll_filter={"must": [{"key": "phone_number", "match": {"value": phone_number}}]},
                 limit=1,
                 with_payload=True,
-                with_vectors=False
+                with_vectors=False  # Optimization: Avoid retrieving vectors as they are not needed for customer data
             )
             if search_result[0]:
                 customer_data = search_result[0][0].payload
@@ -449,12 +462,13 @@ class VectorDBService:
 
     async def delete_orphaned_history(self) -> int:
         """
-        Delete history entries without corresponding customer profiles.
-        Returns the number of deleted entries. Use with caution as this is permanent.
-        Note: This is a maintenance operation and should be used with caution as it permanently deletes data.
+        Delete history entries without corresponding customer profiles to maintain data integrity.
+        Returns the number of deleted entries. Enforces strict cleanup as backward compatibility is not a concern.
+        This is a maintenance operation to ensure no history exists without a customer.
+        Optimized to retrieve minimal data during scan.
         """
         try:
-            app_logger.info("Starting cleanup of orphaned history entries")
+            app_logger.info("Starting strict cleanup of orphaned history entries")
             history_entries = []
             offset = None
             batch_size = 1000
@@ -465,7 +479,7 @@ class VectorDBService:
                     limit=batch_size,
                     offset=offset,
                     with_payload=True,
-                    with_vectors=False
+                    with_vectors=False  # Optimization: Avoid retrieving vectors as they are not needed for cleanup
                 )
                 points, next_offset = result
                 history_entries.extend(points)
@@ -482,11 +496,13 @@ class VectorDBService:
                 if not phone_number:
                     points_to_delete.append(point.id)
                     deleted_count += 1
+                    app_logger.debug(f"Marked for deletion: History entry with no phone_number (ID: {point.id})")
                     continue
                 customer = await self.retrieve_customer(phone_number)
                 if not customer:
                     points_to_delete.append(point.id)
                     deleted_count += 1
+                    app_logger.debug(f"Marked for deletion: Orphaned history entry for non-existent customer {phone_number} (ID: {point.id})")
 
             if points_to_delete:
                 await asyncio.to_thread(
@@ -494,13 +510,85 @@ class VectorDBService:
                     collection_name=self.history_collection_name,
                     points_selector=points_to_delete
                 )
-                app_logger.info(f"Deleted {deleted_count} orphaned history entries without corresponding customers")
+                app_logger.info(f"Strictly deleted {deleted_count} orphaned history entries without corresponding customers")
             else:
-                app_logger.info("No orphaned history entries found to delete")
+                app_logger.info("No orphaned history entries found to delete during strict cleanup")
 
             return deleted_count
         except Exception as e:
-            app_logger.error(f"Error during cleanup of orphaned history entries: {e}")
+            app_logger.error(f"Error during strict cleanup of orphaned history entries: {e}")
             return 0
+
+    async def delete_customer_and_history(self, phone_number: str) -> bool:
+        """
+        Delete a customer profile and all associated conversation history to maintain data consistency.
+        Ensures that no history remains if a customer profile is deleted.
+        Returns True if successful, False otherwise.
+        Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
+        Optimized to retrieve minimal data during deletion.
+        """
+        if not phone_number:
+            app_logger.error("No phone number provided for deleting customer and history")
+            return False
+
+        try:
+            # Check if customer exists
+            customer = await self.retrieve_customer(phone_number)
+            if not customer:
+                app_logger.info(f"No customer found with phone number {phone_number} to delete")
+                return False
+
+            # Delete customer profile
+            customer_search = await asyncio.to_thread(
+                self.client.scroll,
+                collection_name=self.customers_collection_name,
+                scroll_filter={"must": [{"key": "phone_number", "match": {"value": phone_number}}]},
+                limit=1,
+                with_payload=False,  # Optimization: Minimal data retrieval
+                with_vectors=False
+            )
+            if customer_search[0]:
+                customer_id = customer_search[0][0].id
+                await asyncio.to_thread(
+                    self.client.delete,
+                    collection_name=self.customers_collection_name,
+                    points_selector=[customer_id]
+                )
+                app_logger.info(f"Deleted customer profile for {phone_number}")
+
+            # Delete all associated history entries
+            history_points = []
+            offset = None
+            batch_size = 1000
+            while True:
+                result = await asyncio.to_thread(
+                    self.client.scroll,
+                    collection_name=self.history_collection_name,
+                    scroll_filter={"must": [{"key": "phone_number", "match": {"value": phone_number}}]},
+                    limit=batch_size,
+                    offset=offset,
+                    with_payload=False,  # Optimization: Minimal data retrieval
+                    with_vectors=False
+                )
+                points, next_offset = result
+                history_points.extend([p.id for p in points])
+                if not next_offset:
+                    break
+                offset = next_offset
+
+            if history_points:
+                await asyncio.to_thread(
+                    self.client.delete,
+                    collection_name=self.history_collection_name,
+                    points_selector=history_points
+                )
+                app_logger.info(f"Deleted {len(history_points)} history entries for customer {phone_number}")
+            else:
+                app_logger.info(f"No history entries found for customer {phone_number}")
+
+            return True
+        except Exception as e:
+            app_logger.error(f"Error deleting customer and history for {phone_number}: {e}")
+            return False
 
 vector_db_service = VectorDBService()

@@ -9,7 +9,7 @@ async def check_quality(user_text: str, operator_response: str) -> AgentResponse
     Evaluates the quality of the operator's response based on predefined communication standards.
     Uses an LLM to analyze tone, clarity, empathy, and adherence to guidelines in the context
     of the user's message. Returns feedback and a confidence score to guide operator improvement.
-    Includes fallback logic for handling LLM failures.
+    Includes fallback logic for handling LLM failures. Only triggered after operator response.
     """
     settings = get_settings()
     app_logger.info(f"QA Agent: Evaluating operator response for user text: {user_text[:50]}...")
