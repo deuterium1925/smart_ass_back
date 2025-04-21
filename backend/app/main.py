@@ -18,28 +18,28 @@ app = FastAPI(
     description="""
     # Smart Assistant Backend API Documentation
 
-    **Overview**: The Smart Assistant Backend API is a multi-agent LLM system designed to support contact center operators by processing customer queries in real-time. This API enables interaction with customer data and conversation history using `phone_number` (format: `89XXXXXXXXX`) as the unique identifier for customers and `timestamp` (ISO 8601 format) for individual conversation turns. The system is designed to optimize operator workflows with personalized, context-aware suggestions and quality feedback.
+    **Overview**: The Smart Assistant Backend API is a multi-agent LLM system designed to support contact center operators by processing customer queries in real-time. This API enables interaction with customer data and conversation history using `phone_number` (format: `89XXXXXXXXX`) as the unique identifier for customers. The system is designed to optimize operator workflows with personalized, context-aware suggestions and quality feedback.
 
     ## Key Features
     - **Customer Management**: Create, retrieve, or delete customer profiles with detailed attributes for personalized support via `/api/v1/customers/create`, `/api/v1/customers/retrieve/{phone_number}`, and `/api/v1/customers/delete/{phone_number}`.
-    - **Message Storage**: Store incoming user messages via `/api/v1/process`, returning a `timestamp` to reference the conversation turn. QA and Summary Agents are triggered only after an operator response is submitted.
+    - **Message Storage**: Store incoming user messages via `/api/v1/process`, returning a `timestamp` for reference. QA and Summary Agents are triggered only after an operator response is submitted.
     - **On-Demand Conversation Analysis**: Allow operators to trigger analysis by Intent, Emotion, Knowledge, and Action Suggestion Agents for specific conversation turns or recent history via `/api/v1/analyze`. This supports batch processing of multiple messages for coherent insights.
-    - **Operator Response with Automated Feedback**: Submit operator responses via `/api/v1/submit_operator_response`, triggering QA and Summary Agents for immediate feedback on the response quality and conversation summary.
-    - **Manual Agent Trigger**: Manually trigger QA and Summary Agents via `/api/v1/trigger_automated_agents/{phone_number}/{timestamp}` if an operator response is delayed indefinitely.
+    - **Operator Response with Automated Feedback**: Submit operator responses via `/api/v1/submit_operator_response`, triggering QA and Summary Agents for immediate feedback on the response quality and conversation summary. The system automatically selects the most recent unanswered message.
+    - **Manual Agent Trigger**: Manually trigger QA and Summary Agents via `/api/v1/trigger_automated_agents/{phone_number}` if an operator response is delayed indefinitely. The system auto-selects the relevant conversation turn.
     - **Personalization**: Integrate customer data (e.g., tariff plans, subscriptions) into agent suggestions for context-aware responses tailored to individual profiles.
 
     ## Workflow Overview
     1. **Profile Creation**: A customer profile must be created using `/api/v1/customers/create` before any message processing or history updates can occur. The `phone_number` must be in the format `89XXXXXXXXX` (11 digits starting with 89).
-    2. **Message Storage**: Incoming user messages are stored via `/api/v1/process`, returning a unique `timestamp` for the conversation turn. Automated QA and Summary Agents are **not run immediately** to ensure feedback is contextually relevant to operator input.
+    2. **Message Storage**: Incoming user messages are stored via `/api/v1/process`, returning a unique `timestamp` for reference. Automated QA and Summary Agents are **not run immediately** to ensure feedback is contextually relevant to operator input.
     3. **On-Demand Analysis**: Operators can request detailed analysis on-demand via `/api/v1/analyze`, targeting specific conversation turns (via `timestamps`) or recent history (via `history_limit`). Dependent agents (e.g., Action Suggestion) automatically run prerequisite agents (e.g., Intent, Emotion) for complete analysis.
-    4. **Operator Response Submission**: Operator responses are submitted via `/api/v1/submit_operator_response`, triggering QA and Summary Agents to provide feedback and summaries based on the operator's input for the specified `timestamp`.
-    5. **Manual Trigger for Delays**: If an operator response is delayed, QA and Summary Agents can be manually triggered via `/api/v1/trigger_automated_agents/{phone_number}/{timestamp}` to generate feedback without waiting for operator input.
+    4. **Operator Response Submission**: Operator responses are submitted via `/api/v1/submit_operator_response`, triggering QA and Summary Agents to provide feedback and summaries based on the operator's input for the most recent unanswered message.
+    5. **Manual Trigger for Delays**: If an operator response is delayed, QA and Summary Agents can be manually triggered via `/api/v1/trigger_automated_agents/{phone_number}` to generate feedback without waiting for operator input, auto-selecting the relevant turn.
 
     ## Frontend Integration Notes
     - **Strict Phone Number Format Enforcement**: The API strictly enforces the phone number format `89XXXXXXXXX` (11 digits starting with 89). International formats or other variations will be rejected with a HTTP 400 error. Ensure frontend input validation aligns with this requirement to avoid errors.
-    - **Timestamp Identifier**: The `/process` endpoint returns a `timestamp` (ISO 8601 format, UTC) for each stored message, which must be used in `/analyze`, `/submit_operator_response`, or `/trigger_automated_agents` calls to reference specific conversation turns.
+    - **Timestamp Not Required for Responses**: The `/process` endpoint returns a `timestamp` (ISO 8601 format, UTC) for each stored message, but it is for reference only. Endpoints like `/submit_operator_response` and `/trigger_automated_agents` automatically select the relevant conversation turn.
     - **Delayed Automated Results**: Automated results (QA, Summary) are provided **only after operator response submission** or manual triggering via `/trigger_automated_agents`. Frontend UIs must display placeholders or loading states for these results until they are available.
-    - **Error Handling**: Error messages are descriptive and reference `phone_number` and `timestamp` for traceability. Status codes are used consistently (e.g., 400 for bad input like invalid phone number format, 404 for not found, 500 for server errors) to facilitate user-friendly error handling.
+    - **Error Handling**: Error messages are descriptive and reference `phone_number` for traceability. Status codes are used consistently (e.g., 400 for bad input like invalid phone number format, 404 for not found, 500 for server errors) to facilitate user-friendly error handling.
     - **Loading States and Triggers**: For seamless user experience, implement placeholders or loading states for QA and Summary feedback after storing a message via `/process`. Update these states once results are available via `/submit_operator_response` or `/trigger_automated_agents`. Consider polling or WebSocket integration if real-time updates are needed for delayed operator responses.
 
     ## API Endpoints Summary
@@ -48,8 +48,11 @@ app = FastAPI(
     - **DELETE /api/v1/customers/delete/{phone_number}**: Delete a customer profile and all associated history.
     - **POST /api/v1/process**: Store a user message and return a `timestamp` for the turn (QA/Summary delayed).
     - **POST /api/v1/analyze**: Analyze conversation history for actionable insights (Intent, Emotion, Knowledge, Suggestions).
-    - **POST /api/v1/submit_operator_response**: Submit operator response for a turn, triggering QA and Summary feedback.
-    - **POST /api/v1/trigger_automated_agents/{phone_number}/{timestamp}**: Manually trigger QA and Summary Agents if operator response is delayed.
+    - **POST /api/v1/submit_operator_response**: Submit operator response for the most recent unanswered turn, triggering QA and Summary feedback.
+    - **POST /api/v1/trigger_automated_agents/{phone_number}**: Manually trigger QA and Summary Agents for the most recent turn if operator response is delayed.
+    - **GET /api/v1/next_customer**: Fetch the next customer from the queue for operator attention.
+    - **GET /api/v1/queue_status**: Check the current status of the customer queue.
+    - **GET /api/v1/cleanup_queue**: Cleanup the queue by removing customers with no unanswered messages.
     - **GET /health**: Check API operational status.
 
     For detailed endpoint specifications, parameters, and response formats, refer to the interactive Swagger UI at `/docs` or Redoc at `/redoc`.

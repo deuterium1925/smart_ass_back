@@ -432,6 +432,27 @@ class VectorDBService:
             app_logger.error(f"Error retrieving conversation history for customer {phone_number}: {e}")
             return []
 
+    async def get_latest_unanswered_turn(self, phone_number: str, limit: int = 50) -> Optional[Dict]:
+        """
+        Retrieve the most recent unanswered conversation turn for a customer.
+        Returns a dictionary with the turn data or None if no unanswered turns exist.
+        """
+        if not phone_number:
+            app_logger.error("No phone number provided for retrieving latest unanswered turn")
+            return None
+
+        try:
+            history = await self.retrieve_conversation_history(phone_number, limit)
+            for entry in reversed(history):
+                if entry["user_text"].strip() and not entry["operator_response"].strip():
+                    app_logger.info(f"Found latest unanswered turn for customer {phone_number} at timestamp {entry['timestamp']}")
+                    return entry
+            app_logger.info(f"No unanswered turns found for customer {phone_number}")
+            return None
+        except Exception as e:
+            app_logger.error(f"Error retrieving latest unanswered turn for customer {phone_number}: {e}")
+            return None
+
     async def upsert_customer(self, customer: Customer) -> bool:
         """
         Upsert a customer profile into the customers collection for personalized agent responses.

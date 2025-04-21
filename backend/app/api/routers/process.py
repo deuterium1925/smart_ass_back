@@ -18,7 +18,7 @@ router = APIRouter()
     Adds customer to FIFO queue if they have unresponded messages.
     
     **Frontend Integration Notes**:
-    - Use the returned `timestamp` to reference this message in subsequent `/analyze` or `/submit_operator_response` calls.
+    - Use the returned `timestamp` for reference only; it is not required for subsequent `/analyze` or `/submit_operator_response` calls as the system auto-selects the relevant message.
     - QA and Summary results are not available immediately and will be provided only after the operator submits a response or a manual trigger is initiated via `/trigger_automated_agents`.
     - Display a placeholder or loading state for QA and Summary results until the operator response is submitted or manually triggered.
     - Ensure `phone_number` is in format `89XXXXXXXXX` (11 digits starting with 89) before calling this endpoint to avoid validation errors.
@@ -212,22 +212,8 @@ async def submit_operator_response(
                 detail=f"Ошибка: Профиль клиента с номером телефона {payload.phone_number} не найден. Пожалуйста, создайте профиль перед обновлением истории."
             )
 
-        # Retrieve conversation history to find the most recent unanswered user message
-        history_data = await vector_db_service.retrieve_conversation_history(payload.phone_number, limit=50)
-        if not history_data:
-            log_message_processing(payload.phone_number, "FAILED", "No conversation history found.")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No conversation history found for customer {payload.phone_number}."
-            )
-
-        # Identify the most recent unanswered user message
-        unanswered_turn = None
-        for entry in reversed(history_data):  # Check from the most recent to oldest
-            if entry["user_text"].strip() and not entry["operator_response"].strip():
-                unanswered_turn = entry
-                break
-
+        # Retrieve the most recent unanswered user message
+        unanswered_turn = await vector_db_service.get_latest_unanswered_turn(payload.phone_number)
         if not unanswered_turn:
             log_message_processing(payload.phone_number, "FAILED", "No unanswered user messages found.")
             raise HTTPException(
@@ -257,6 +243,17 @@ async def submit_operator_response(
             user_text=user_text,
             operator_response=payload.operator_response
         )
+
+        # Check for remaining unanswered messages and update queue if none exist
+        async with queue_lock:
+            history_data = await vector_db_service.retrieve_conversation_history(payload.phone_number, limit=50)
+            has_unanswered = any(entry["user_text"].strip() and not entry["operator_response"].strip() for entry in history_data)
+            if not has_unanswered and payload.phone_number in customer_queue:
+                customer_queue.remove(payload.phone_number)
+                app_logger.info(f"Removed customer {payload.phone_number} from queue as no unanswered messages remain. Queue length: {len(customer_queue)}")
+                await vector_db_service.save_queue_state(list(customer_queue), active_conversation)
+                app_logger.info(f"Persisted queue state after removing {payload.phone_number}")
+
         log_message_processing(payload.phone_number, "COMPLETED", "Operator response submitted and automated agents processed successfully.")
         return {
             "status": "success",
@@ -294,24 +291,24 @@ async def submit_operator_response(
         )
 
 @router.post(
-    "/trigger_automated_agents/{phone_number}/{timestamp}",
+    "/trigger_automated_agents/{phone_number}",
     response_model=dict,
     summary="Manually Trigger Automated Agents",
     description="""
-    Manually triggers QA and Summary Agents for a specific conversation turn if the operator response 
+    Manually triggers QA and Summary Agents for the most recent conversation turn if the operator response 
     has not been submitted within a certain time frame. Requires an existing customer profile identified by `phone_number` in format `89XXXXXXXXX`.
     
     **Frontend Integration Notes**:
     - Use this endpoint to trigger QA and Summary Agents manually if the operator response is delayed indefinitely.
-    - Use the `timestamp` returned by `/process` to specify the conversation turn.
+    - The system automatically selects the most recent conversation turn (prioritizing unanswered messages).
     - Ensure `phone_number` is in format `89XXXXXXXXX` (11 digits starting with 89) before calling this endpoint to avoid validation errors.
     - Display the results once they are returned, updating any placeholders or loading states with QA and Summary feedback.
     """,
     status_code=status.HTTP_200_OK,
 )
-async def trigger_automated_agents(phone_number: str, timestamp: str):
+async def trigger_automated_agents(phone_number: str):
     """
-    Endpoint to manually trigger QA and Summary Agents for a specific conversation turn.
+    Endpoint to manually trigger QA and Summary Agents for the most recent conversation turn.
     Useful for handling cases where operator response is delayed indefinitely.
     Rejects operation if no customer profile exists or if the conversation turn is not found or phone number is invalid.
     """
@@ -325,7 +322,7 @@ async def trigger_automated_agents(phone_number: str, timestamp: str):
                 detail="Phone number must be 11 digits starting with '89' (format: 89XXXXXXXXX)."
             )
 
-        log_message_processing(cleaned_phone, "STARTED", f"Manually triggering automated agents for timestamp {timestamp}.")
+        log_message_processing(cleaned_phone, "STARTED", "Manually triggering automated agents for the most recent turn.")
         # Check if customer profile exists
         customer = await vector_db_service.retrieve_customer(cleaned_phone)
         if not customer:
@@ -335,24 +332,27 @@ async def trigger_automated_agents(phone_number: str, timestamp: str):
                 detail=f"Ошибка: Профиль клиента с номером телефона {cleaned_phone} не найден."
             )
 
-        # Retrieve history to find the specific turn
+        # Retrieve history to find the most recent unanswered turn or fallback to latest turn
         history_data = await vector_db_service.retrieve_conversation_history(cleaned_phone, limit=50)
-        user_text = ""
-        operator_response = ""
-        turn_found = False
-        for entry in history_data:
-            if entry["timestamp"] == timestamp:
-                user_text = entry["user_text"]
-                operator_response = entry["operator_response"]
-                turn_found = True
-                break
-
-        if not turn_found:
-            log_message_processing(cleaned_phone, "FAILED", f"Conversation turn not found for timestamp {timestamp}.")
+        if not history_data:
+            log_message_processing(cleaned_phone, "FAILED", "No conversation history found.")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Conversation turn not found for timestamp {timestamp} for customer {cleaned_phone}. Suggestion: Fetch recent conversation history via /analyze to get the correct timestamp."
+                detail=f"No conversation history found for customer {cleaned_phone}."
             )
+
+        # Select the most recent unanswered turn or the latest turn if all are answered
+        selected_turn = None
+        for entry in reversed(history_data):  # Most recent first
+            if entry["user_text"].strip() and not entry["operator_response"].strip():
+                selected_turn = entry
+                break
+        if not selected_turn:
+            selected_turn = history_data[-1]  # Fallback to the most recent turn if all answered
+
+        timestamp = selected_turn["timestamp"]
+        user_text = selected_turn["user_text"]
+        operator_response = selected_turn["operator_response"]
 
         # Trigger automated agents (QA and Summary)
         automated_result = await process_automated_agents(
@@ -365,6 +365,7 @@ async def trigger_automated_agents(phone_number: str, timestamp: str):
         return {
             "status": "success",
             "message": f"Automated agents triggered successfully for timestamp {timestamp}.",
+            "timestamp": timestamp,
             "automated_results": {
                 "summary": automated_result.get("summary", AgentResponse(
                     agent_name="SummaryAgent",
@@ -383,10 +384,10 @@ async def trigger_automated_agents(phone_number: str, timestamp: str):
         raise
     except Exception as e:
         log_message_processing(phone_number, "FAILED", f"Error triggering automated agents: {str(e)}")
-        app_logger.error(f"Error triggering automated agents for customer {phone_number} at timestamp {timestamp}: {e}")
+        app_logger.error(f"Error triggering automated agents for customer {phone_number}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred while triggering automated agents for customer {phone_number} at timestamp {timestamp}: {str(e)}",
+            detail=f"An unexpected error occurred while triggering automated agents for customer {phone_number}: {str(e)}",
         )
 
 @router.get(
@@ -481,6 +482,53 @@ async def get_queue_status():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred while fetching queue status: {str(e)}",
+        )
+
+@router.get(
+    "/cleanup_queue",
+    response_model=dict,
+    summary="Cleanup Queue of Customers with No Unanswered Messages",
+    description="""
+    Removes customers from the queue who have no unanswered messages. This ensures the queue reflects only customers needing operator attention.
+    
+    **Frontend Integration Notes**:
+    - Use this endpoint to ensure the queue is up-to-date, especially after operator responses or manual cleanups.
+    - Display the results (number of removed customers and new queue length) to provide feedback to the operator.
+    """,
+    status_code=status.HTTP_200_OK,
+)
+async def cleanup_queue():
+    """
+    Endpoint to remove customers from the queue who have no unanswered messages.
+    Returns the number of removed customers and updated queue length.
+    Persists the updated queue state to the database.
+    """
+    try:
+        async with queue_lock:
+            initial_length = len(customer_queue)
+            customers_to_remove = []
+            for phone_number in customer_queue:
+                history = await vector_db_service.retrieve_conversation_history(phone_number, limit=50)
+                has_unanswered = any(entry["user_text"].strip() and not entry["operator_response"].strip() for entry in history)
+                if not has_unanswered:
+                    customers_to_remove.append(phone_number)
+            for phone_number in customers_to_remove:
+                customer_queue.remove(phone_number)
+                app_logger.info(f"Removed customer {phone_number} from queue during cleanup (no unanswered messages).")
+            await vector_db_service.save_queue_state(list(customer_queue), active_conversation)
+            app_logger.info(f"Queue cleanup completed. Removed {len(customers_to_remove)} customers. New queue length: {len(customer_queue)}")
+            return {
+                "status": "success",
+                "message": f"Queue cleanup completed. Removed {len(customers_to_remove)} customers. New queue length: {len(customer_queue)}.",
+                "removed_customers": len(customers_to_remove),
+                "initial_queue_length": initial_length,
+                "current_queue_length": len(customer_queue)
+            }
+    except Exception as e:
+        app_logger.error(f"Error during queue cleanup: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred during queue cleanup: {str(e)}",
         )
 
 @router.get(
