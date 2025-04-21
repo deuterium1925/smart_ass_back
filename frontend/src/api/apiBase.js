@@ -1,12 +1,12 @@
 import axios from "axios";
 
+const apiUrl = import.meta.env.VITE_API_URL;
+
 export const apiBase = axios.create({
-  baseURL: "http://89.169.2.93:8000",
+  baseURL: apiUrl,
 });
 
 apiBase.interceptors.request.use(config => {
-//   const token = localStorage.getItem("token");
-//   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
