@@ -197,8 +197,8 @@ async def analyze_conversation_request(
     If the customer is the active conversation, allows for updating history accordingly.
     
     **Frontend Integration Notes**:
-    - Optionally provide `timestamp` (from `/process` or `/history`) to target a specific conversation turn. If omitted, the system selects the most recent unanswered message.
-    - If no unanswered messages exist, a new turn is created for follow-up communication.
+    - Optionally provide `timestamp` (from `/process` or `/history`) to target a specific conversation turn. If omitted, the system selects the most recent unanswered message or creates a new turn.
+    - If no unanswered messages exist or the targeted turn already has a response, a new turn is created for follow-up communication.
     - Ensure `phone_number` matches the customer profile and is in format `89XXXXXXXXX` (11 digits starting with 89) to avoid orphaned data or validation errors.
     - After submission, QA and Summary results will be available in the response for immediate display. Update any placeholders or loading states with these results.
     """,
@@ -234,7 +234,7 @@ async def submit_operator_response(
                 detail=f"Ошибка: Профиль клиента с номером телефона {payload.phone_number} не найден. Пожалуйста, создайте профиль перед обновлением истории."
             )
 
-        timestamp = payload.timestamp
+        timestamp = getattr(payload, 'timestamp', None)  # Safely access timestamp, default to None if not present
         user_text = ""
         history_data = await vector_db_service.retrieve_conversation_history(payload.phone_number, limit=50)
         selected_turn = None

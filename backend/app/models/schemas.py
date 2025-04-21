@@ -46,6 +46,7 @@ class OperatorResponseInput(BaseModel):
     """Input model for submitting an operator's response to update conversation history."""
     phone_number: str = Field(..., description="Unique identifier for the customer (phone number in format 89XXXXXXXXX).")
     operator_response: str = Field(..., description="The response from the operator for the current turn.")
+    timestamp: Optional[str] = Field(default=None, description="Optional timestamp of the specific conversation turn to update (ISO 8601 format, UTC). If not provided, the most recent unanswered turn is selected or a new turn is created.")
 
     @validator('phone_number')
     def validate_and_normalize_phone_number(cls, v):
