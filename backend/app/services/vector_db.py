@@ -368,20 +368,11 @@ class VectorDBService:
             return False
 
     async def retrieve_conversation_history(self, phone_number: str, limit: int = 10) -> List[Dict]:
-        """
-        Retrieve conversation history for a customer by phone_number, limited to recent turns.
-        Validates customer existence and uses indexed field for performance. Sorts by timestamp for chronological order.
-        Returns an empty list if no customer profile exists.
-        Assumes phone number is normalized to format 89XXXXXXXXX via model validation.
-        Optimized to avoid retrieving unnecessary vector data.
-        Assigns sequence numbers for frontend ordering.
-        """
         if not phone_number:
             app_logger.error("No phone number provided for retrieving conversation history")
             return []
 
         try:
-            # Validate customer existence before retrieval
             customer = await self.retrieve_customer(phone_number)
             if not customer:
                 app_logger.error(f"Cannot retrieve history: No customer found with phone number {phone_number}")
@@ -394,32 +385,45 @@ class VectorDBService:
                 scroll_filter={"must": [{"key": "phone_number", "match": {"value": phone_number}}]},
                 limit=limit,
                 with_payload=True,
-                with_vectors=False  # Optimization: Avoid retrieving vectors as they are not needed for history display
+                with_vectors=False
             )
-            history = [
-                {
-                    "phone_number": point.payload.get("phone_number", ""),
-                    "user_text": point.payload.get("user_text", ""),
-                    "operator_response": point.payload.get("operator_response", ""),
-                    "timestamp": point.payload.get("timestamp", ""),
-                    # Role logic: assistant if operator response exists, else user if user text exists
-                    "role": (
-                        "assistant" if point.payload.get("operator_response", "").strip()
-                        else "user" if point.payload.get("user_text", "").strip()
-                        else "unknown"
-                    ),
-                    "sequence_number": 0  # Placeholder, will be updated below
-                }
-                for point in search_result[0]
-            ]
-            # Log debug messages for ambiguous role assignments to monitor data consistency
-            for entry in history:
-                user_text_present = bool(entry["user_text"].strip())
-                operator_resp_present = bool(entry["operator_response"].strip())
-                if entry["role"] == "unknown":
-                    app_logger.debug(f"Unknown role for history entry for customer {phone_number}: Neither user_text nor operator_response present")
-                elif user_text_present and operator_resp_present and entry["role"] == "assistant":
-                    app_logger.debug(f"Both fields present for history entry for customer {phone_number}: Assigned role={entry['role']} prioritizing operator_response")
+            history = []
+            for point in search_result[0]:
+                user_text = point.payload.get("user_text", "").strip()
+                operator_response = point.payload.get("operator_response", "").strip()
+                timestamp = point.payload.get("timestamp", "")
+                phone = point.payload.get("phone_number", "")
+
+                # Split into two entries if both user_text and operator_response are present
+                if user_text:
+                    history.append({
+                        "phone_number": phone,
+                        "user_text": user_text,
+                        "operator_response": "",
+                        "timestamp": timestamp,
+                        "role": "user",
+                        "sequence_number": 0
+                    })
+                if operator_response:
+                    history.append({
+                        "phone_number": phone,
+                        "user_text": "",
+                        "operator_response": operator_response,
+                        "timestamp": timestamp,
+                        "role": "assistant",
+                        "sequence_number": 0
+                    })
+                # If neither is present, log for debugging
+                if not user_text and not operator_response:
+                    app_logger.debug(f"Empty history entry for customer {phone_number} at timestamp {timestamp}: Neither user_text nor operator_response present")
+                    history.append({
+                        "phone_number": phone,
+                        "user_text": "",
+                        "operator_response": "",
+                        "timestamp": timestamp,
+                        "role": "unknown",
+                        "sequence_number": 0
+                    })
 
             # Sort by timestamp and assign sequence numbers for frontend ordering
             history.sort(key=lambda x: x.get("timestamp", "0"), reverse=False)
