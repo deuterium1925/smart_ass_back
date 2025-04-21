@@ -2,29 +2,49 @@
 import AgentHelp from './AgentHelp.vue';
 import ChatWindow from './ChatWindow.vue';
 import ClientInfo from './ClientInfo.vue';
+import { userStore } from "@/store/userStore";
+import { ref } from 'vue'
+import { sendDialog } from '@/api/apiBase';
 
-// Define props received from App.vue
-const props = defineProps({
-  chat: {
-    type: [Object, null],
-    default: null,
-  },
-});
+const usersStore = userStore();
+const value = ref('');
+
+
+const sendMessage = async () => {
+  if (usersStore.isLoading || value.value === '') return
+
+  try {
+    await sendDialog({
+      "phone_number": usersStore.currentUser?.phone_number,
+      "operator_response": value.value
+    });
+
+    value.value = '';
+  } catch {
+    console.error('error sending');
+  }
+};
 </script>
 
 <template>
   <div class="operator-interface">
-    <div v-if="!chat" class="placeholder">Выберите чат для начала общения</div>
+    <div v-if="!usersStore.currentUser" class="placeholder">Выберите чат для начала общения</div>
+
     <template v-else>
       <div class="left-side">
-        <ChatWindow :chat="chat" />
-        <ClientInfo :chat="chat" />
+        <ChatWindow />
+
+        <ClientInfo />
       </div>
+
       <div class="right-side">
-        <AgentHelp :chat="chat" />
+        <AgentHelp />
+
         <div class="message-input">
-          <input type="text" placeholder="Сообщение..." />
-          <button>Отправить</button>
+          <input type="text" placeholder="Сообщение..." v-model="value" />
+
+          <button :class="{ 'disabled': usersStore.isLoading }" :disabled="usersStore.isLoading"
+            @click="sendMessage">Отправить</button>
         </div>
       </div>
     </template>
@@ -33,7 +53,8 @@ const props = defineProps({
 
 <style scoped>
 .operator-interface {
-  flex-grow: 1; /* Take remaining horizontal space */
+  flex-grow: 1;
+  /* Take remaining horizontal space */
   display: flex;
   height: 100%;
   background-color: var(--whitish);
@@ -72,6 +93,7 @@ const props = defineProps({
   margin-top: auto;
   gap: 0.7rem;
 }
+
 .message-input input {
   flex-grow: 1;
   padding: 0.3rem 1rem;
@@ -79,6 +101,7 @@ const props = defineProps({
   border-radius: 1.1rem;
   background-color: var(--whitish);
 }
+
 .message-input button {
   padding: 0.3rem 1rem;
   border: none;
@@ -86,5 +109,9 @@ const props = defineProps({
   color: var(--white);
   border-radius: 1.1rem;
   cursor: pointer;
+}
+
+.message-input .disabled {
+  background: #595959;
 }
 </style>

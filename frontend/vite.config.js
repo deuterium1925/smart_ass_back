@@ -9,10 +9,9 @@ export default defineConfig({
   plugins: [vue(), vueDevTools()],
   server: {
     proxy: {
-      '/api/v1/customers/retrieve/': {
-        target: 'http://localhost:3000/',
+      '/api': {
+        target: 'http://89.169.2.93:8000',
         changeOrigin: true,
-        rewrite: (path) => '/chats',
       },
     },
   },

@@ -1,8 +1,7 @@
 <script setup>
 import avatarSrc from '@/icons/user.svg';
 
-// Define props received from ChatSidebar.vue
-const props = defineProps({
+defineProps({
   chat: {
     type: Object,
     required: true,
@@ -31,11 +30,15 @@ const props = defineProps({
 }
 
 .chat-item:hover {
-  background-color: var(--red); /* Hover effect */
+  background-color: var(--red-hover);
 }
 
-.chat-item.active {
-  background-color: var(--red); /* Active chat highlight */
+.active {
+  background-color: var(--red);
+}
+
+.active:hover {
+  background-color: var(--red);
 }
 
 .avatar {
