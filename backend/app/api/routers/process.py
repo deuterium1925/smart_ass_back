@@ -195,13 +195,13 @@ async def submit_operator_response(
     try:
         log_message_processing(payload.phone_number, "STARTED", "Submitting operator response and triggering automated agents.")
         async with queue_lock:
-            # Check for any remaining unanswered messages after this response
-            history_data = await vector_db_service.retrieve_conversation_history(payload.phone_number, limit=50)
-            has_unanswered = any(entry["user_text"].strip() and not entry["operator_response"].strip() for entry in history_data)
-            if not has_unanswered and payload.phone_number in customer_queue:
-                customer_queue.remove(payload.phone_number)
-                app_logger.info(f"Removed customer {payload.phone_number} from queue as no unanswered messages remain. Queue length: {len(customer_queue)}")
-                await vector_db_service.save_queue_state(list(customer_queue), active_conversation)
+            if active_conversation and active_conversation != payload.phone_number:
+                app_logger.warning(f"Operator is responding to {payload.phone_number} but active conversation is {active_conversation}.")
+                # Optionally enforce active conversation check
+                # raise HTTPException(
+                #     status_code=status.HTTP_400_BAD_REQUEST,
+                #     detail=f"Cannot respond to {payload.phone_number}. Active conversation is with {active_conversation}. Switch using /next_customer."
+                # )
 
         # Check if customer profile exists before updating history
         customer = await vector_db_service.retrieve_customer(payload.phone_number)

@@ -158,7 +158,7 @@ class ProcessMessageResponse(BaseModel):
     """Response model for storing a user message via /process endpoint."""
     status: str = Field(..., description="Status of the operation (e.g., 'success', 'error').")
     message: str = Field(..., description="Descriptive message about the operation result.")
-    timestamp: str = Field(..., description="Timestamp of the stored conversation turn in ISO 8601 format (UTC).")
+    timestamp: str = Field(..., description="Timestamp of the stored conversation turn in ISO 8601 format (UTC). For reference only; not required for operator response submission.")
     automated_results: Dict[str, AgentResponse] = Field(
         ..., description="Placeholder results for Summary and QA agents (run after operator response)."
     )
